@@ -1,0 +1,31 @@
+<resources>
+    <string name="app_name">URP2026</string>
+    <string name="tap_button">Tap</string>
+    <string name="tap_count">Taps: %1$d</string>
+    <string name="neon_section_title">Neon Companion (localhost)</string>
+    <string name="neon_hint">Open Neon Companion on this phone first.</string>
+    <string name="neon_btn_status">GET status</string>
+    <string name="neon_btn_start">POST recording:start</string>
+    <string name="neon_btn_stop">POST recording:stop_and_save</string>
+    <string name="neon_btn_event">POST event (probe)</string>
+    <string name="neon_busy">Working…</string>
+    <string name="neon_section_raw">Raw endpoints</string>
+    <string name="neon_section_flow">Recorder-shaped (Python parity)</string>
+    <string name="neon_btn_smoke">Smoke test (status + event)</string>
+    <string name="neon_btn_session_start">Start session (start + imu_stream_start)</string>
+    <string name="neon_btn_session_stop">Stop session (imu_stream_end + stop_and_save)</string>
+    <string name="neon_active_recording">Neon recording id: %1$s</string>
+    <string name="neon_active_recording_none">Neon recording id: (none)</string>
+    <string name="neon_last_result_title">Last result</string>
+    <string name="neon_last_result_empty">Tap a button — result shows here (and a short toast).</string>
+    <string name="qtpy_btn_connect">QT Py connect USB</string>
+    <string name="qtpy_btn_disconnect">QT Py disconnect</string>
+    <string name="qtpy_btn_clear_monitor">Clear serial monitor</string>
+    <string name="qtpy_status_line">QT Py: connected=%1$s, reading=%2$s, lines=%3$s</string>
+    <string name="qtpy_last_line">Last line: %1$s</string>
+    <string name="qtpy_monitor_title">QT Py serial monitor (recent lines)</string>
+    <string name="qtpy_monitor_empty">No serial lines yet. Connect QT Py and start streaming.</string>
+    <string name="flow_section_title">Main flow (QTPy first, then both)</string>
+    <string name="flow_btn_start_both">Start both recording</string>
+    <string name="flow_btn_stop_both">Stop both recording</string>
+</resources>

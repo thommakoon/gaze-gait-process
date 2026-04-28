@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import com.hoho.android.usbserial.driver.UsbSerialDriver
 import com.hoho.android.usbserial.driver.UsbSerialPort
@@ -24,12 +25,27 @@ import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 import java.util.concurrent.atomic.AtomicBoolean
 
+data class QtPyLineRecord(
+    val rawLine: String,
+    val recvElapsedRealtimeNs: Long,
+    val recvWallTimeNs: Long,
+    val seq: Long? = null,
+    val timeUs: Long? = null,
+    val timeUsExtended: Long? = null,
+)
+
 data class QtPyBridgeState(
     val connected: Boolean = false,
     val reading: Boolean = false,
     val linesReceived: Long = 0,
     val lastLine: String = "",
     val recentLines: List<String> = emptyList(),
+    val recentRecords: List<QtPyLineRecord> = emptyList(),
+    val lastRecvElapsedRealtimeNs: Long? = null,
+    val lastRecvWallTimeNs: Long? = null,
+    val lastSeq: Long? = null,
+    val lastTimeUs: Long? = null,
+    val lastTimeUsExtended: Long? = null,
     val status: String = "Idle",
 )
 
@@ -45,15 +61,23 @@ class QtPySerialBridge(
     private var activePort: UsbSerialPort? = null
     private var readJob: Job? = null
     private val closed = AtomicBoolean(false)
+    private val timeUsExtender = TimeUsExtender()
+    @Volatile
+    private var lineRecordListener: ((QtPyLineRecord) -> Unit)? = null
 
     private val _state = MutableStateFlow(QtPyBridgeState())
     val state: StateFlow<QtPyBridgeState> = _state.asStateFlow()
 
     fun isReady(): Boolean = _state.value.connected
 
+    fun setLineRecordListener(listener: ((QtPyLineRecord) -> Unit)?) {
+        lineRecordListener = listener
+    }
+
     fun clearRecentLines() {
         _state.value = _state.value.copy(
             recentLines = emptyList(),
+            recentRecords = emptyList(),
             lastLine = "",
             status = if (_state.value.connected) "Reading lines…" else _state.value.status,
         )
@@ -127,6 +151,7 @@ class QtPySerialBridge(
         stopReaderInternal()
         val port = activePort ?: return
         _state.value = _state.value.copy(reading = true, status = "Reading lines…")
+        timeUsExtender.reset()
         readJob = ioScope.launch {
             val buffer = ByteArray(1024)
             val text = StringBuilder()
@@ -140,13 +165,33 @@ class QtPySerialBridge(
                         val raw = text.substring(0, newlineIdx).trim('\r')
                         text.delete(0, newlineIdx + 1)
                         if (raw.isNotEmpty()) {
+                            val recvElapsedNs = SystemClock.elapsedRealtimeNanos()
+                            val recvWallNs = System.currentTimeMillis() * 1_000_000L
+                            val parsed = parseSeqTimeUs(raw)
+                            val extUs = parsed?.timeUs?.let { timeUsExtender.extend(it) }
+                            val record = QtPyLineRecord(
+                                rawLine = raw,
+                                recvElapsedRealtimeNs = recvElapsedNs,
+                                recvWallTimeNs = recvWallNs,
+                                seq = parsed?.seq,
+                                timeUs = parsed?.timeUs,
+                                timeUsExtended = extUs,
+                            )
                             val updatedRecent = (_state.value.recentLines + raw).takeLast(200)
+                            val updatedRecords = (_state.value.recentRecords + record).takeLast(400)
                             _state.value = _state.value.copy(
                                 linesReceived = _state.value.linesReceived + 1,
                                 lastLine = raw,
                                 recentLines = updatedRecent,
+                                recentRecords = updatedRecords,
+                                lastRecvElapsedRealtimeNs = recvElapsedNs,
+                                lastRecvWallTimeNs = recvWallNs,
+                                lastSeq = parsed?.seq ?: _state.value.lastSeq,
+                                lastTimeUs = parsed?.timeUs ?: _state.value.lastTimeUs,
+                                lastTimeUsExtended = extUs ?: _state.value.lastTimeUsExtended,
                                 status = "Reading lines…",
                             )
+                            lineRecordListener?.invoke(record)
                         }
                         newlineIdx = text.indexOf("\n")
                     }
@@ -205,4 +250,39 @@ class QtPySerialBridge(
                 }
             }
         }
+}
+
+private data class ParsedSeqTimeUs(
+    val seq: Long,
+    val timeUs: Long,
+)
+
+private fun parseSeqTimeUs(line: String): ParsedSeqTimeUs? {
+    val parts = line.split(',')
+    if (parts.size < 2) return null
+    val seq = parts[0].toLongOrNull() ?: return null
+    val timeUs = parts[1].toLongOrNull() ?: return null
+    return ParsedSeqTimeUs(seq, timeUs)
+}
+
+private class TimeUsExtender {
+    private var wraps = 0L
+    private var lastTimeUs: Long? = null
+
+    fun reset() {
+        wraps = 0L
+        lastTimeUs = null
+    }
+
+    fun extend(timeUs: Long): Long {
+        val prev = lastTimeUs
+        if (prev != null) {
+            // Detect micros() wrap (uint32): large backward jump means overflow.
+            if (timeUs < prev && (prev - timeUs) > 1_000_000_000L) {
+                wraps += 1L
+            }
+        }
+        lastTimeUs = timeUs
+        return timeUs + wraps * 4_294_967_296L
+    }
 }

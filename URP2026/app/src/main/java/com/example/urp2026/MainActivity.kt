@@ -74,12 +74,14 @@ fun NeonProbeScreen(
     var busy by remember { mutableStateOf(false) }
     var recordingIdDisplay by remember { mutableStateOf<String?>(integration.neonActiveRecordingId()) }
     var combinedActive by remember { mutableStateOf(integration.isCombinedSessionActive()) }
+    var csvSessionInfo by remember { mutableStateOf<String?>(integration.csvSessionInfo()) }
     val scope = rememberCoroutineScope()
     val scroll = rememberScrollState()
 
     fun refreshRecordingLabel() {
         recordingIdDisplay = integration.neonActiveRecordingId()
         combinedActive = integration.isCombinedSessionActive()
+        csvSessionInfo = integration.csvSessionInfo()
     }
 
     fun append(line: String) {
@@ -139,6 +141,23 @@ fun NeonProbeScreen(
         )
         Text(
             text = stringResource(R.string.qtpy_last_line, qtPyState.lastLine.ifBlank { "(none yet)" }),
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Text(
+            text = stringResource(
+                R.string.qtpy_timing_line,
+                qtPyState.lastSeq?.toString() ?: "-",
+                qtPyState.lastTimeUs?.toString() ?: "-",
+                qtPyState.lastTimeUsExtended?.toString() ?: "-",
+            ),
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Text(
+            text = stringResource(
+                R.string.qtpy_recv_time_line,
+                qtPyState.lastRecvElapsedRealtimeNs?.toString() ?: "-",
+                qtPyState.lastRecvWallTimeNs?.toString() ?: "-",
+            ),
             style = MaterialTheme.typography.bodySmall,
         )
         Text(
@@ -204,6 +223,12 @@ fun NeonProbeScreen(
                 ?: stringResource(R.string.neon_active_recording_none),
             style = MaterialTheme.typography.labelMedium,
         )
+        csvSessionInfo?.let {
+            Text(
+                text = it,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
 
         Card(
             modifier = Modifier.fillMaxWidth(),

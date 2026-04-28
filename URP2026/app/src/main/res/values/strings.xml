@@ -23,6 +23,8 @@
     <string name="qtpy_btn_clear_monitor">Clear serial monitor</string>
     <string name="qtpy_status_line">QT Py: connected=%1$s, reading=%2$s, lines=%3$s</string>
     <string name="qtpy_last_line">Last line: %1$s</string>
+    <string name="qtpy_timing_line">Timing: seq=%1$s, time_us=%2$s, ext_us=%3$s</string>
+    <string name="qtpy_recv_time_line">Recv: elapsed_ns=%1$s, wall_ns=%2$s</string>
     <string name="qtpy_monitor_title">QT Py serial monitor (recent lines)</string>
     <string name="qtpy_monitor_empty">No serial lines yet. Connect QT Py and start streaming.</string>
     <string name="flow_section_title">Main flow (QTPy first, then both)</string>

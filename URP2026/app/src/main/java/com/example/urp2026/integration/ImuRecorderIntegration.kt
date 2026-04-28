@@ -1,14 +1,18 @@
 package com.example.urp2026.integration
 
 import android.content.Context
+import android.os.Environment
+import android.os.SystemClock
 import com.example.urp2026.neon.NeonCompanionApi
 import com.example.urp2026.neon.NeonHttpResult
 import com.example.urp2026.neon.describe
 import com.example.urp2026.qtpy.QtPyBridgeState
+import com.example.urp2026.qtpy.QtPyLineRecord
 import com.example.urp2026.qtpy.QtPySerialBridge
 import kotlinx.coroutines.flow.StateFlow
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -20,11 +24,20 @@ class ImuRecorderIntegration(
     context: Context,
     private val neon: NeonCompanionApi = NeonCompanionApi(),
 ) {
+    private val appContext = context.applicationContext
     private val qtPy = QtPySerialBridge(context)
+    private val csvRecorder = DualImuCsvRecorder(rootDir = resolveRecordingRoot())
 
     /** Last Neon recording id from a successful `recording:start` (for UI / debugging). */
     private val activeRecordingId = AtomicReference<String?>(null)
     private val combinedSessionActive = AtomicBoolean(false)
+    private val csvSessionInfo = AtomicReference<String?>(null)
+
+    init {
+        qtPy.setLineRecordListener { record ->
+            onQtPyLineRecord(record)
+        }
+    }
 
     fun qtPyReady(): Boolean = qtPy.isReady()
     fun qtPyStateFlow(): StateFlow<QtPyBridgeState> = qtPy.state
@@ -32,7 +45,13 @@ class ImuRecorderIntegration(
     suspend fun qtPyConnectResult(): String = qtPy.connect()
     suspend fun qtPyDisconnectResult(): String = qtPy.disconnect()
     fun qtPyClearMonitor() = qtPy.clearRecentLines()
-    fun close() = qtPy.close()
+    fun csvSessionInfo(): String? = csvSessionInfo.get()
+    fun close() {
+        combinedSessionActive.set(false)
+        csvRecorder.close()
+        qtPy.setLineRecordListener(null)
+        qtPy.close()
+    }
 
     fun neonActiveRecordingId(): String? = activeRecordingId.get()
     fun isCombinedSessionActive(): Boolean = combinedSessionActive.get()
@@ -62,7 +81,7 @@ class ImuRecorderIntegration(
     }
 
     suspend fun neonSendProbeEvent(): String = when (
-        val r = neon.neonSendEvent("android_probe", System.nanoTime())
+        val r = neon.neonSendEvent("android_probe", SystemClock.elapsedRealtimeNanos())
     ) {
         is NeonHttpResult.Ok -> "POST /event android_probe OK."
         is NeonHttpResult.Err -> r.describe("POST /event")
@@ -74,7 +93,7 @@ class ImuRecorderIntegration(
     suspend fun neonSmokeTest(): String = when (val st = neon.neonStatus()) {
         is NeonHttpResult.Err -> st.describe("Smoke (status)")
         is NeonHttpResult.Ok -> when (
-            val ev = neon.neonSendEvent("android_probe_smoke", System.nanoTime())
+            val ev = neon.neonSendEvent("android_probe_smoke", SystemClock.elapsedRealtimeNanos())
         ) {
             is NeonHttpResult.Err ->
                 "Status OK (${summarizeStatus(st.value)}) but " + ev.describe("Smoke (event)")
@@ -94,7 +113,7 @@ class ImuRecorderIntegration(
             }
             is NeonHttpResult.Ok -> {
                 activeRecordingId.set(start.value)
-                val t = System.nanoTime()
+                val t = SystemClock.elapsedRealtimeNanos()
                 when (val ev = neon.neonSendEvent("imu_stream_start", t)) {
                     is NeonHttpResult.Ok ->
                         return "Session started — id=${start.value}, imu_stream_start OK."
@@ -111,7 +130,7 @@ class ImuRecorderIntegration(
      * Same order as Python when stream ends: `imu_stream_end` then `recording:stop_and_save`.
      */
     suspend fun neonStopFootSessionLikeRecorder(): String {
-        val t = System.nanoTime()
+        val t = SystemClock.elapsedRealtimeNanos()
         val endEv = neon.neonSendEvent("imu_stream_end", t)
         val stop = neon.neonStopRecording()
         activeRecordingId.set(null)
@@ -138,10 +157,15 @@ class ImuRecorderIntegration(
         if (combinedSessionActive.get()) {
             return "Both recording session is already active."
         }
+        val (lfFile, rfFile) = csvRecorder.startNewSession()
+        csvSessionInfo.set("CSV: LF=${lfFile.name}, RF=${rfFile.name} @ ${lfFile.parentFile?.absolutePath}")
         val result = neonStartFootSessionLikeRecorder()
         if (activeRecordingId.get() != null) {
             combinedSessionActive.set(true)
+            return "$result\n${csvSessionInfo.get()}"
         }
+        csvRecorder.close()
+        csvSessionInfo.set(null)
         return result
     }
 
@@ -153,8 +177,44 @@ class ImuRecorderIntegration(
     suspend fun stopBothSession(): String {
         val result = neonStopFootSessionLikeRecorder()
         combinedSessionActive.set(false)
-        return result
+        csvRecorder.close()
+        return buildString {
+            append(result)
+            csvSessionInfo.get()?.let { append("\n").append(it) }
+        }
     }
+
+    private fun onQtPyLineRecord(record: QtPyLineRecord) {
+        if (!combinedSessionActive.get()) return
+        val parsed = parseIcm20Line(record.rawLine) ?: return
+        csvRecorder.appendIcm20(
+            seq = parsed.seq,
+            timeUs = parsed.timeUs,
+            timeUsExtended = record.timeUsExtended,
+            recvElapsedNs = record.recvElapsedRealtimeNs,
+            tUtcNs = record.recvWallTimeNs,
+            lf = parsed.lf,
+            rf = parsed.rf,
+        )
+    }
+
+    private fun parseIcm20Line(raw: String): ParsedIcm20? {
+        val parts = raw.split(',')
+        if (parts.size != 20) return null
+        val seq = parts[0].toLongOrNull() ?: return null
+        val timeUs = parts[1].toLongOrNull() ?: return null
+        val vals = parts.drop(2).map { it.toDoubleOrNull() ?: return null }
+        val lf = vals.subList(0, 9).toDoubleArray()
+        val rf = vals.subList(9, 18).toDoubleArray()
+        return ParsedIcm20(seq = seq, timeUs = timeUs, lf = lf, rf = rf)
+    }
+
+    private data class ParsedIcm20(
+        val seq: Long,
+        val timeUs: Long,
+        val lf: DoubleArray,
+        val rf: DoubleArray,
+    )
 
     /**
      * Short human-readable status. Handles:
@@ -208,6 +268,16 @@ class ImuRecorderIntegration(
             if (connected == 0) {
                 append(". If glasses are on: open Neon Companion and complete device connection.")
             }
+        }
+    }
+
+    private fun resolveRecordingRoot(): File {
+        // Termux-like structure under app external documents: Documents/thom/data
+        val externalDocs = appContext.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS)
+        return if (externalDocs != null) {
+            File(externalDocs, "thom/data").apply { mkdirs() }
+        } else {
+            File(appContext.filesDir, "recordings/thom/data").apply { mkdirs() }
         }
     }
 }

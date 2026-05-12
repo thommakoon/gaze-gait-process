@@ -1,0 +1,119 @@
+# =============================================================================
+# Top-level .gitignore for the AndroidStudio repo
+# Covers: URP2026 (Android), motorola/firmware (Arduino), analysis/ (Python)
+# =============================================================================
+
+# ---- Recorded data (NEVER commit) -------------------------------------------
+analysis/data/
+Test/
+StrokeGait/
+**/recordings/
+**/*_export/
+
+# Common binary recording artifacts (Neon, Xsens, etc.)
+*.mp4
+*.raw
+*.bin
+*.zip
+*.time
+*.time_aux
+*.dtype
+*.proto
+*.wav
+**/calibration.bin
+**/android.log.zip
+**/Neon Sensor Module*.bin
+**/Neon Scene Camera*
+
+# ---- Generated / derived analysis artifacts ---------------------------------
+analysis/derived/
+*.parquet
+LF_imu_fused_*.csv
+RF_imu_fused_*.csv
+Head_imu.csv
+sync_quality_report.txt
+sampletimefine_vs_t_utc_stats.txt
+rpy_9subplots.png
+rpy_lf_rf*.png
+
+# Allow checking in example/figure outputs explicitly via -f if ever needed.
+
+# ---- Python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# venvs
+.venv/
+venv/
+env/
+ENV/
+
+# uv (keep uv.lock; ignore caches only)
+.uv-cache/
+
+# packaging / build
+build/
+dist/
+*.egg-info/
+*.egg
+pip-log.txt
+pip-delete-this-directory.txt
+
+# pytest / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# mypy / ruff
+.mypy_cache/
+.ruff_cache/
+
+# ---- Android / Gradle (URP2026) ---------------------------------------------
+.gradle/
+**/build/
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.dex
+*.ap_
+*.aar
+*.iml
+gradle-app.setting
+!gradle-wrapper.jar
+release/
+
+# ---- Arduino / PlatformIO (motorola/firmware) -------------------------------
+.pio/
+.pioenvs/
+.piolibdeps/
+**/build_*/
+*.elf
+*.hex
+*.map
+
+# ---- IDE / editor -----------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- OS ---------------------------------------------------------------------
+$RECYCLE.BIN/
+ehthumbs.db
+ehthumbs_vista.db

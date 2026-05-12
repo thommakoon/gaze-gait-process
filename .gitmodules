@@ -1,0 +1,4 @@
+[submodule "analysis/external/imu_gait_analysis"]
+	path = analysis/external/imu_gait_analysis
+	url = https://github.com/thommakoon/imu_gait_analysis.git
+	branch = thomTest

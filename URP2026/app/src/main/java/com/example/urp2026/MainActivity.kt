@@ -7,6 +7,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -19,6 +20,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -35,6 +37,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.example.urp2026.integration.ImuRecorderIntegration
+import com.example.urp2026.qtpy.QtPyLinkLatencyDiagnostics
 import com.example.urp2026.ui.theme.URP2026Theme
 import kotlinx.coroutines.launch
 
@@ -77,6 +80,8 @@ fun NeonProbeScreen(
     var csvSessionInfo by remember { mutableStateOf<String?>(integration.csvSessionInfo()) }
     val scope = rememberCoroutineScope()
     val scroll = rememberScrollState()
+    var verboseSerialMonitor by remember { mutableStateOf(true) }
+    var verboseTimingDetails by remember { mutableStateOf(true) }
 
     fun refreshRecordingLabel() {
         recordingIdDisplay = integration.neonActiveRecordingId()
@@ -139,55 +144,89 @@ fun NeonProbeScreen(
             ),
             style = MaterialTheme.typography.labelMedium,
         )
-        Text(
-            text = stringResource(R.string.qtpy_last_line, qtPyState.lastLine.ifBlank { "(none yet)" }),
-            style = MaterialTheme.typography.bodySmall,
-        )
-        Text(
-            text = stringResource(
-                R.string.qtpy_timing_line,
-                qtPyState.lastSeq?.toString() ?: "-",
-                qtPyState.lastTimeUs?.toString() ?: "-",
-                qtPyState.lastTimeUsExtended?.toString() ?: "-",
-            ),
-            style = MaterialTheme.typography.bodySmall,
-        )
-        Text(
-            text = stringResource(
-                R.string.qtpy_recv_time_line,
-                qtPyState.lastRecvElapsedRealtimeNs?.toString() ?: "-",
-                qtPyState.lastRecvWallTimeNs?.toString() ?: "-",
-            ),
-            style = MaterialTheme.typography.bodySmall,
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(top = 4.dp),
+        ) {
+            Switch(
+                checked = verboseSerialMonitor,
+                onCheckedChange = { verboseSerialMonitor = it },
+            )
+            Text(
+                text = stringResource(R.string.qtpy_verbose_serial_switch),
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.padding(start = 8.dp),
+            )
+        }
+        if (verboseSerialMonitor) {
+            Text(
+                text = stringResource(R.string.qtpy_last_line, qtPyState.lastLine.ifBlank { "(none yet)" }),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(top = 2.dp),
+        ) {
+            Switch(
+                checked = verboseTimingDetails,
+                onCheckedChange = { verboseTimingDetails = it },
+            )
+            Text(
+                text = stringResource(R.string.qtpy_verbose_timing_switch),
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.padding(start = 8.dp),
+            )
+        }
+        if (verboseTimingDetails) {
+            Text(
+                text = stringResource(
+                    R.string.qtpy_timing_line,
+                    qtPyState.lastSeq?.toString() ?: "-",
+                    qtPyState.lastTimeUs?.toString() ?: "-",
+                    qtPyState.lastTimeUsExtended?.toString() ?: "-",
+                ),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                text = stringResource(
+                    R.string.qtpy_recv_time_line,
+                    qtPyState.lastRecvElapsedRealtimeNs?.toString() ?: "-",
+                    qtPyState.lastRecvWallTimeNs?.toString() ?: "-",
+                ),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
         Text(
             text = qtPyState.status,
             style = MaterialTheme.typography.bodySmall,
         )
-        Text(
-            text = stringResource(R.string.qtpy_monitor_title),
-            style = MaterialTheme.typography.titleSmall,
-        )
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(180.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant,
-            ),
-        ) {
+        if (verboseSerialMonitor) {
             Text(
-                text = if (qtPyState.recentLines.isEmpty()) {
-                    stringResource(R.string.qtpy_monitor_empty)
-                } else {
-                    qtPyState.recentLines.joinToString(separator = "\n")
-                },
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(monitorScroll)
-                    .padding(10.dp),
+                text = stringResource(R.string.qtpy_monitor_title),
+                style = MaterialTheme.typography.titleSmall,
             )
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(180.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                ),
+            ) {
+                Text(
+                    text = if (qtPyState.recentLines.isEmpty()) {
+                        stringResource(R.string.qtpy_monitor_empty)
+                    } else {
+                        qtPyState.recentLines.joinToString(separator = "\n")
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(monitorScroll)
+                        .padding(10.dp),
+                )
+            }
         }
 
         Button(
@@ -299,6 +338,29 @@ fun NeonProbeScreen(
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(top = 8.dp),
         )
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+        Text(
+            text = stringResource(R.string.qtpy_latency_diag_title),
+            style = MaterialTheme.typography.titleSmall,
+        )
+        Text(
+            text = stringResource(R.string.qtpy_latency_diag_hint),
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(bottom = 6.dp),
+        )
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+            ),
+        ) {
+            Text(
+                text = QtPyLinkLatencyDiagnostics.summarize(qtPyState.recentRecords),
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(12.dp),
+            )
+        }
     }
 }
 

@@ -1,5 +1,3 @@
-# analysis/.gitignore (in addition to repo-root .gitignore)
-
 # Local data + derived outputs (never commit recordings or generated artifacts)
 data/
 derived/
@@ -17,9 +15,3 @@ __pycache__/
 
 # Notebook checkpoints
 .ipynb_checkpoints/
-
-# Submodule contents are tracked via .gitmodules + commit SHA; the working
-# tree is populated by `git submodule update --init`. Ignore stray local files.
-external/imu_gait_analysis/.venv/
-external/imu_gait_analysis/**/__pycache__/
-external/imu_gait_analysis/**/*.pyc

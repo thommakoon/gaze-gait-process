@@ -2,14 +2,18 @@ package com.example.urp2026.integration
 
 import android.content.Context
 import android.os.Environment
-import android.os.SystemClock
 import com.example.urp2026.neon.NeonCompanionApi
 import com.example.urp2026.neon.NeonHttpResult
 import com.example.urp2026.neon.describe
 import com.example.urp2026.qtpy.QtPyBridgeState
 import com.example.urp2026.qtpy.QtPyLineRecord
 import com.example.urp2026.qtpy.QtPySerialBridge
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -27,6 +31,7 @@ class ImuRecorderIntegration(
     private val appContext = context.applicationContext
     private val qtPy = QtPySerialBridge(context)
     private val csvRecorder = DualImuCsvRecorder(rootDir = resolveRecordingRoot())
+    private val eventScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /** Last Neon recording id from a successful `recording:start` (for UI / debugging). */
     private val activeRecordingId = AtomicReference<String?>(null)
@@ -37,6 +42,19 @@ class ImuRecorderIntegration(
         qtPy.setLineRecordListener { record ->
             onQtPyLineRecord(record)
         }
+    }
+
+    companion object {
+        /**
+         * Send a Neon `imu_seq_<seq>` event every N IMU lines while a combined session is active.
+         * Provides drift-checkable alignment anchors between QT Py IMU and Neon clocks
+         * without flooding the Companion `/api/event` endpoint.
+         * At 200 Hz ≈ one event per 5 s; at 100 Hz ≈ one per 10 s (same N).
+         */
+        const val HEARTBEAT_EVERY_N_LINES: Long = 1000L
+
+        /** Current Unix-epoch nanoseconds; what Neon `/api/event` expects in `timestamp`. */
+        private fun utcNanosNow(): Long = System.currentTimeMillis() * 1_000_000L
     }
 
     fun qtPyReady(): Boolean = qtPy.isReady()
@@ -51,6 +69,7 @@ class ImuRecorderIntegration(
         csvRecorder.close()
         qtPy.setLineRecordListener(null)
         qtPy.close()
+        eventScope.cancel()
     }
 
     fun neonActiveRecordingId(): String? = activeRecordingId.get()
@@ -81,7 +100,7 @@ class ImuRecorderIntegration(
     }
 
     suspend fun neonSendProbeEvent(): String = when (
-        val r = neon.neonSendEvent("android_probe", SystemClock.elapsedRealtimeNanos())
+        val r = neon.neonSendEvent("android_probe", utcNanosNow())
     ) {
         is NeonHttpResult.Ok -> "POST /event android_probe OK."
         is NeonHttpResult.Err -> r.describe("POST /event")
@@ -93,7 +112,7 @@ class ImuRecorderIntegration(
     suspend fun neonSmokeTest(): String = when (val st = neon.neonStatus()) {
         is NeonHttpResult.Err -> st.describe("Smoke (status)")
         is NeonHttpResult.Ok -> when (
-            val ev = neon.neonSendEvent("android_probe_smoke", SystemClock.elapsedRealtimeNanos())
+            val ev = neon.neonSendEvent("android_probe_smoke", utcNanosNow())
         ) {
             is NeonHttpResult.Err ->
                 "Status OK (${summarizeStatus(st.value)}) but " + ev.describe("Smoke (event)")
@@ -113,7 +132,7 @@ class ImuRecorderIntegration(
             }
             is NeonHttpResult.Ok -> {
                 activeRecordingId.set(start.value)
-                val t = SystemClock.elapsedRealtimeNanos()
+                val t = utcNanosNow()
                 when (val ev = neon.neonSendEvent("imu_stream_start", t)) {
                     is NeonHttpResult.Ok ->
                         return "Session started — id=${start.value}, imu_stream_start OK."
@@ -130,7 +149,7 @@ class ImuRecorderIntegration(
      * Same order as Python when stream ends: `imu_stream_end` then `recording:stop_and_save`.
      */
     suspend fun neonStopFootSessionLikeRecorder(): String {
-        val t = SystemClock.elapsedRealtimeNanos()
+        val t = utcNanosNow()
         val endEv = neon.neonSendEvent("imu_stream_end", t)
         val stop = neon.neonStopRecording()
         activeRecordingId.set(null)
@@ -186,7 +205,7 @@ class ImuRecorderIntegration(
 
     private fun onQtPyLineRecord(record: QtPyLineRecord) {
         if (!combinedSessionActive.get()) return
-        val parsed = parseIcm20Line(record.rawLine) ?: return
+        val parsed = parseDualImuCsvLine(record.rawLine) ?: return
         csvRecorder.appendIcm20(
             seq = parsed.seq,
             timeUs = parsed.timeUs,
@@ -196,17 +215,55 @@ class ImuRecorderIntegration(
             lf = parsed.lf,
             rf = parsed.rf,
         )
+        maybeSendHeartbeat(parsed.seq, record.recvWallTimeNs)
     }
 
-    private fun parseIcm20Line(raw: String): ParsedIcm20? {
+    /**
+     * Fire-and-forget a Neon `imu_seq_<seq>` event every [HEARTBEAT_EVERY_N_LINES] IMU rows.
+     * Uses the row's own phone-UTC receive time as the event timestamp so the marker is
+     * anchored to a specific IMU sample, not to the (slightly later) HTTP POST instant.
+     */
+    private fun maybeSendHeartbeat(seq: Long, tUtcNs: Long) {
+        if (seq <= 0L) return
+        if (seq % HEARTBEAT_EVERY_N_LINES != 0L) return
+        eventScope.launch {
+            neon.neonSendEvent("imu_seq_$seq", tUtcNs)
+        }
+    }
+
+    /**
+     * Dual IMU CSV from QT Py: **20 fields** (LF/RF accel+gyro+mag) or **14 fields**
+     * (accel+gyro only, e.g. sketch_usb_dual_timer / sketch_usb_dual_100).
+     * Parsed arrays keep 9 floats per foot for a stable shape; [DualImuCsvRecorder] writes
+     * only meta + Acc + Gyr (mag is not persisted to CSV).
+     */
+    private fun parseDualImuCsvLine(raw: String): ParsedIcm20? {
         val parts = raw.split(',')
-        if (parts.size != 20) return null
-        val seq = parts[0].toLongOrNull() ?: return null
-        val timeUs = parts[1].toLongOrNull() ?: return null
+        val seq = parts.getOrNull(0)?.toLongOrNull() ?: return null
+        val timeUs = parts.getOrNull(1)?.toLongOrNull() ?: return null
         val vals = parts.drop(2).map { it.toDoubleOrNull() ?: return null }
-        val lf = vals.subList(0, 9).toDoubleArray()
-        val rf = vals.subList(9, 18).toDoubleArray()
-        return ParsedIcm20(seq = seq, timeUs = timeUs, lf = lf, rf = rf)
+        return when (parts.size) {
+            20 -> {
+                if (vals.size != 18) return null
+                ParsedIcm20(
+                    seq = seq,
+                    timeUs = timeUs,
+                    lf = vals.subList(0, 9).toDoubleArray(),
+                    rf = vals.subList(9, 18).toDoubleArray(),
+                )
+            }
+            14 -> {
+                if (vals.size != 12) return null
+                val lf = DoubleArray(9) { i ->
+                    if (i < 6) vals[i] else 0.0
+                }
+                val rf = DoubleArray(9) { i ->
+                    if (i < 6) vals[6 + i] else 0.0
+                }
+                ParsedIcm20(seq = seq, timeUs = timeUs, lf = lf, rf = rf)
+            }
+            else -> null
+        }
     }
 
     private data class ParsedIcm20(

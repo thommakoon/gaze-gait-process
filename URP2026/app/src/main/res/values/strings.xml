@@ -21,6 +21,8 @@
     <string name="qtpy_btn_connect">QT Py connect USB</string>
     <string name="qtpy_btn_disconnect">QT Py disconnect</string>
     <string name="qtpy_btn_clear_monitor">Clear serial monitor</string>
+    <string name="qtpy_verbose_serial_switch">Verbose serial monitor</string>
+    <string name="qtpy_verbose_timing_switch">Verbose timing &amp; recv</string>
     <string name="qtpy_status_line">QT Py: connected=%1$s, reading=%2$s, lines=%3$s</string>
     <string name="qtpy_last_line">Last line: %1$s</string>
     <string name="qtpy_timing_line">Timing: seq=%1$s, time_us=%2$s, ext_us=%3$s</string>
@@ -30,4 +32,6 @@
     <string name="flow_section_title">Main flow (QTPy first, then both)</string>
     <string name="flow_btn_start_both">Start both recording</string>
     <string name="flow_btn_stop_both">Stop both recording</string>
+    <string name="qtpy_latency_diag_title">QT Py → phone latency (diag)</string>
+    <string name="qtpy_latency_diag_hint">Compares consecutive IMU rows: Δrecv_elapsed vs Δtime_us_extended. IMU↔QT Py I²C is not measured here (use firmware micros() on the board).</string>
 </resources>

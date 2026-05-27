@@ -1,0 +1,19 @@
+[project]
+name = "motorola-pc"
+version = "0.1.0"
+description = "PC-side tools for the URP2026 motorola / QT Py recording stack."
+requires-python = ">=3.10"
+
+dependencies = [
+    "pyserial>=3.5",   # bench_i2c_report.py  — QT Py serial capture
+    "numpy>=1.24",     # tcp_dual_imu_rpy_plot.py
+    "pyqtgraph>=0.13", # tcp_dual_imu_rpy_plot.py — live RPY plot
+    "PyQt5>=5.15,<5.15.11",  # tcp_dual_imu_rpy_plot.py — Qt backend (>=5.15.11 dropped Windows wheels)
+    "pupil-labs-realtime-api>=1.8",  # neon_probe.py — LAN discovery + gaze RTSP
+    "opencv-contrib-python>=4.8",    # neon_monitor_gaze.py — ArUco detection + homography
+]
+
+[tool.uv]
+package = false  # scripts-only directory — no package to build or install
+# pyqt5-qt5 >=5.15.3 dropped Windows wheels; pin to the last version that ships them.
+constraint-dependencies = ["pyqt5-qt5<5.15.3"]

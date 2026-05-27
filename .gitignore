@@ -117,3 +117,6 @@ desktop.ini
 $RECYCLE.BIN/
 ehthumbs.db
 ehthumbs_vista.db
+
+# ---- Unity ------------------------------------------------------------------
+XREAL_URP/

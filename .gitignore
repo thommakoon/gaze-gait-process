@@ -1,11 +1,9 @@
 # =============================================================================
-# Top-level .gitignore for the AndroidStudio repo
-# Covers: URP2026 (Android), motorola/firmware (Arduino), analysis/ (Python)
+# gazeGait — URP2026 (Android), motorola (firmware + PC tools), scripts/ (Python)
 # =============================================================================
 
 # ---- Recorded data (NEVER commit) -------------------------------------------
-analysis/data/
-Test/
+data/
 StrokeGait/
 **/recordings/
 **/*_export/
@@ -122,4 +120,8 @@ ehthumbs_vista.db
 XREAL_URP/
 XREAL_Driver/
 XREAL_map/
+
+# ---- Misc -------------------------------------------------------------------
 yongHwan_study.pdf
+migrate_cursor_chats.py
+migrate_submodule_chats.py

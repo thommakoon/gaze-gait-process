@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Export a gait-analysis session bundle under ``data/data_gait_xsens/<session>/``.
+"""Export a gait-analysis session bundle under ``data/05_gait_xsens/<session>/``.
 
 Foot IMU (for lin / imu_gait_analysis):
     ``LF.csv``, ``RF.csv`` — Xsens MTw layout (6 metadata lines + header).
     ``DataLoader.load_xsens_data()`` reads with skiprows=7.
 
-Aligned 200 Hz grid (copied from ``data/data_grid_200hz/<session>/``):
+Aligned 200 Hz grid (copied from ``data/03_grid_200hz/<session>/``):
     ``gaze_200hz.csv``, ``head_200hz.csv``, ``grid_200hz_meta.csv``
     ``LF_imu_fused_*_200hz.csv``, ``RF_imu_fused_*_200hz.csv`` (shared ``t_utc_ns``)
 
 Foot conversion source defaults to the grid; ``--source cleaned`` or ``raw`` still
-bundles grid companions when that session exists in ``data_grid_200hz``.
+bundles grid companions when that session exists in ``03_grid_200hz``.
 
 Usage (from scripts/01_clean/):
     cd scripts/01_clean && uv sync
@@ -30,7 +30,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from _paths import DATA_GAIT_XSENS, DATA_GRID_200HZ, SOURCE_DIRS
+from _paths import GAIT_XSENS, GRID_200HZ, SOURCE_DIRS
 
 ACC_COLS = ["Acc_X", "Acc_Y", "Acc_Z"]
 GYR_COLS = ["Gyr_X", "Gyr_Y", "Gyr_Z"]
@@ -173,8 +173,8 @@ def format_row(row: pd.Series) -> list[str]:
 
 
 def copy_grid_bundle(session_id: str, out_dir: Path) -> list[str]:
-    """Copy aligned gaze/head/meta + grid foot CSVs from data_grid_200hz."""
-    grid_dir = DATA_GRID_200HZ / session_id
+    """Copy aligned gaze/head/meta + grid foot CSVs from 03_grid_200hz."""
+    grid_dir = GRID_200HZ / session_id
     if not grid_dir.is_dir():
         raise FileNotFoundError(f"Grid session not found: {grid_dir}")
 
@@ -284,12 +284,12 @@ def main() -> None:
         "--source",
         choices=("grid", "cleaned", "raw"),
         default="grid",
-        help="Input stage (default: data_grid_200hz)",
+        help="Input stage (default: 03_grid_200hz)",
     )
     parser.add_argument(
         "--output-root",
         type=Path,
-        default=DATA_GAIT_XSENS,
+        default=GAIT_XSENS,
         help="Output base directory",
     )
     parser.add_argument("--firmware", default="URP2026")

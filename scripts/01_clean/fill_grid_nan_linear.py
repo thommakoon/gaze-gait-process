@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Linear interpolation of NaN values on data_grid_200hz CSVs (optional).
+"""Linear interpolation of NaN values on 03_grid_200hz CSVs (optional).
 
 Only needed for grids built with older gap masking. Current ``grid_utc_200hz.py``
 does not mask by gap; re-run grid instead of this script when possible.
@@ -7,12 +7,12 @@ does not mask by gap; re-run grid instead of this script when possible.
 Rows share uniform 200 Hz ``t_utc_ns``; each numeric column is filled along time.
 
 Writes the same filenames under <output-root>/<session_id>/ (default:
-data_grid_200hz_filled).
+04_grid_200hz_filled).
 
 Usage (from scripts/01_clean/):
     cd scripts/01_clean && uv sync
     uv run python fill_grid_nan_linear.py \\
-        --session-dir ../../data/data_grid_200hz/20260513_220325
+        --session-dir ../../data/03_grid_200hz/20260513_220325
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from _paths import DATA_GRID_200HZ_FILLED
+from _paths import GRID_200HZ_FILLED
 
 TS_COL = "t_utc_ns"
 GRID_GLOB = "*_200hz.csv"
@@ -88,7 +88,7 @@ def main() -> None:
     parser.add_argument(
         "--output-root",
         type=Path,
-        default=DATA_GRID_200HZ_FILLED,
+        default=GRID_200HZ_FILLED,
     )
     args = parser.parse_args()
     try:

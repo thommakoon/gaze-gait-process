@@ -12,9 +12,9 @@ Residual compares **intervals** between consecutive rows (seq+1 only):
 From scripts/01_clean/:
     cd scripts/01_clean && uv sync
     uv run python check_imu_csv_quality.py \\
-        ../../data/raw/<session>/LF_imu_fused_*.csv \\
-        ../../data/raw/<session>/RF_imu_fused_*.csv \\
-        -o ../../data/raw/<session>/quality_report.txt
+        ../../data/00_raw/<session>/LF_imu_fused_*.csv \\
+        ../../data/00_raw/<session>/RF_imu_fused_*.csv \\
+        -o ../../data/00_raw/<session>/quality_report.txt
 """
 
 from __future__ import annotations

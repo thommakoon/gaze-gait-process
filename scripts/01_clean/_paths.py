@@ -7,15 +7,16 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA_ROOT = REPO_ROOT / "data"
 
-RAW = DATA_ROOT / "raw"
-DATA_CORRECTED = DATA_ROOT / "data_corrected"
-DATA_CLEANED = DATA_ROOT / "data_cleaned"
-DATA_GRID_200HZ = DATA_ROOT / "data_grid_200hz"
-DATA_GRID_200HZ_FILLED = DATA_ROOT / "data_grid_200hz_filled"
-DATA_GAIT_XSENS = DATA_ROOT / "data_gait_xsens"
+# Numbered stages (pipeline order)
+RAW = DATA_ROOT / "00_raw"
+CORRECTED = DATA_ROOT / "01_corrected"
+CLEANED = DATA_ROOT / "02_cleaned"
+GRID_200HZ = DATA_ROOT / "03_grid_200hz"
+GRID_200HZ_FILLED = DATA_ROOT / "04_grid_200hz_filled"
+GAIT_XSENS = DATA_ROOT / "05_gait_xsens"
 
 SOURCE_DIRS = {
     "raw": RAW,
-    "cleaned": DATA_CLEANED,
-    "grid": DATA_GRID_200HZ,
+    "cleaned": CLEANED,
+    "grid": GRID_200HZ,
 }

@@ -20,7 +20,7 @@ Outputs under <output-root>/<session_id>/:
 Usage (from scripts/01_clean/):
     cd scripts/01_clean && uv sync
     uv run python drop_imu_bad_dt.py \\
-        --session-dir ../../data/data_corrected/20260513_220325
+        --session-dir ../../data/01_corrected/20260513_220325
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from _paths import DATA_CLEANED
+from _paths import CLEANED
 
 TS_COL = "t_utc_ns"
 SEQ_COL = "PacketCounter"
@@ -345,7 +345,7 @@ def main() -> None:
     parser.add_argument(
         "--output-root",
         type=Path,
-        default=DATA_CLEANED,
+        default=CLEANED,
     )
     parser.add_argument("--dt-lo-ms", type=float, default=DEFAULT_DT_LO_MS, help="Foot LF/RF")
     parser.add_argument("--dt-hi-ms", type=float, default=DEFAULT_DT_HI_MS, help="Foot LF/RF")

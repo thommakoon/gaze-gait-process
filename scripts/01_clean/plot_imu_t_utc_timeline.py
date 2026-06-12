@@ -4,9 +4,9 @@
 Modes:
   * Foot only (default): LF + RF from paths you pass.
   * --neon: also gaze.csv + imu.csv from <session>/*_export/ (raw data layout).
-  * --corrected: also gaze.csv + head.csv next to LF/RF (data_corrected bundle).
-  * --cleaned: same layout as --corrected for data_cleaned (after drop_imu_bad_dt.py).
-  * --grid: ``data_grid_200hz`` bundle (*_200hz.csv, shared 5 ms ``t_utc_ns``).
+  * --corrected: also gaze.csv + head.csv next to LF/RF (01_corrected bundle).
+  * --cleaned: same layout as --corrected for 02_cleaned (after drop_imu_bad_dt.py).
+  * --grid: ``03_grid_200hz`` bundle (*_200hz.csv, shared 5 ms ``t_utc_ns``).
 
 Foot uses ``t_utc_ns``; Neon/gaze/head use ``timestamp [ns]`` (except --grid: all ``t_utc_ns``).
 X-axis: relative ns from the earliest sample across all plotted streams.
@@ -16,20 +16,20 @@ Run from scripts/01_clean/:
     cd scripts/01_clean
     uv sync
     uv run python plot_imu_t_utc_timeline.py \\
-        ../../data/raw/20260513_220325/LF_imu_fused_20260513_220325.csv \\
-        ../../data/raw/20260513_220325/RF_imu_fused_20260513_220325.csv \\
+        ../../data/00_raw/20260513_220325/LF_imu_fused_20260513_220325.csv \\
+        ../../data/00_raw/20260513_220325/RF_imu_fused_20260513_220325.csv \\
         --neon
 
     uv run python plot_imu_t_utc_timeline.py \\
-        --session-dir ../../data/data_corrected/20260513_220325 --corrected --plain
+        --session-dir ../../data/01_corrected/20260513_220325 --corrected --plain
 
     uv run python plot_imu_t_utc_timeline.py \\
-        --session-dir ../../data/data_cleaned/20260513_220325 --cleaned --plain \\
-        -o ../../data/data_cleaned/20260513_220325/t_utc_timeline.png --no-show
+        --session-dir ../../data/02_cleaned/20260513_220325 --cleaned --plain \\
+        -o ../../data/02_cleaned/20260513_220325/t_utc_timeline.png --no-show
 
     uv run python plot_imu_t_utc_timeline.py \\
-        --session-dir ../../data/data_grid_200hz/20260513_220325 --grid --plain \\
-        -o ../../data/data_grid_200hz/20260513_220325/t_utc_timeline.png --no-show
+        --session-dir ../../data/03_grid_200hz/20260513_220325 --grid --plain \\
+        -o ../../data/03_grid_200hz/20260513_220325/t_utc_timeline.png --no-show
 """
 
 from __future__ import annotations
@@ -353,17 +353,17 @@ def main() -> None:
     parser.add_argument(
         "--corrected",
         action="store_true",
-        help="Add gaze.csv + head.csv from same folder as LF/RF (data_corrected)",
+        help="Add gaze.csv + head.csv from same folder as LF/RF (01_corrected)",
     )
     parser.add_argument(
         "--cleaned",
         action="store_true",
-        help="Same as --corrected but for data_cleaned (title suffix data_cleaned)",
+        help="Same as --corrected but for 02_cleaned (title suffix 02_cleaned)",
     )
     parser.add_argument(
         "--grid",
         action="store_true",
-        help="data_grid_200hz: *_200hz.csv + gaze_200hz + head_200hz (all t_utc_ns)",
+        help="03_grid_200hz: *_200hz.csv + gaze_200hz + head_200hz (all t_utc_ns)",
     )
     parser.add_argument(
         "--show-invalid",
@@ -401,11 +401,11 @@ def main() -> None:
 
     bundle = args.corrected or args.cleaned
     if args.grid:
-        bundle_label = "data_grid_200hz"
+        bundle_label = "03_grid_200hz"
     elif args.cleaned:
-        bundle_label = "data_cleaned"
+        bundle_label = "02_cleaned"
     elif args.corrected:
-        bundle_label = "data_corrected"
+        bundle_label = "01_corrected"
     else:
         bundle_label = ""
 
@@ -416,7 +416,7 @@ def main() -> None:
         plain = True  # default plain for dense 200 Hz grid
 
     if bundle and args.session_dir is None and not any(
-        x in str(lf.parent) for x in ("data_corrected", "data_cleaned")
+        x in str(lf.parent) for x in ("01_corrected", "02_cleaned")
     ):
         print("Note: --corrected/--cleaned expects gaze.csv and head.csv beside LF/RF.", file=sys.stderr)
 

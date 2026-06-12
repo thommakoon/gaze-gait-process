@@ -14,7 +14,7 @@ Also writes movement_psd_summary.csv (peaks + mean coherence).
 Usage (from scripts/01_clean/):
     cd scripts/01_clean && uv sync
     uv run python plot_movement_psd.py \\
-        --session-dir ../../data/data_grid_200hz/20260513_220325
+        --session-dir ../../data/03_grid_200hz/20260513_220325
 """
 
 from __future__ import annotations

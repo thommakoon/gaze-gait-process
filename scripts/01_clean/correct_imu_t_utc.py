@@ -15,9 +15,9 @@ Outputs under <output-root>/<session_id>/:
 Usage (from scripts/01_clean/):
     cd scripts/01_clean && uv sync
     uv run python correct_imu_t_utc.py \\
-        ../../data/raw/20260513_220325/LF_imu_fused_20260513_220325.csv \\
-        ../../data/raw/20260513_220325/RF_imu_fused_20260513_220325.csv \\
-        --export-dir ../../data/raw/20260513_220325/2026-05-13_22-19-28_export
+        ../../data/00_raw/20260513_220325/LF_imu_fused_20260513_220325.csv \\
+        ../../data/00_raw/20260513_220325/RF_imu_fused_20260513_220325.csv \\
+        --export-dir ../../data/00_raw/20260513_220325/2026-05-13_22-19-28_export
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from _paths import DATA_CORRECTED
+from _paths import CORRECTED
 
 TS_COL = "t_utc_ns"
 SEQ_COL = "PacketCounter"
@@ -238,7 +238,7 @@ def main() -> None:
     parser.add_argument(
         "--output-root",
         type=Path,
-        default=DATA_CORRECTED,
+        default=CORRECTED,
     )
     parser.add_argument("--export-dir", type=Path, default=None)
     parser.add_argument("--no-neon", action="store_true")

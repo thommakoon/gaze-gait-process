@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a shared 200 Hz UTC grid from data_cleaned session files.
+"""Build a shared 200 Hz UTC grid from 02_cleaned session files.
 
 Each stream is linearly interpolated onto the same ``t_utc_ns`` axis (5 ms step)
 over the overlap window [max(starts), min(ends)]. Values outside a stream's time
@@ -13,7 +13,7 @@ Outputs under <output-root>/<session_id>/:
 Usage (from scripts/01_clean/):
     cd scripts/01_clean && uv sync
     uv run python grid_utc_200hz.py \\
-        --session-dir ../../data/data_cleaned/20260513_220325
+        --session-dir ../../data/02_cleaned/20260513_220325
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ import numpy as np
 import pandas as pd
 from scipy.interpolate import interp1d
 
-from _paths import DATA_GRID_200HZ
+from _paths import GRID_200HZ
 
 FS_HZ = 200
 DT_NS = 1_000_000_000 // FS_HZ
@@ -204,7 +204,7 @@ def main() -> None:
     parser.add_argument(
         "--output-root",
         type=Path,
-        default=DATA_GRID_200HZ,
+        default=GRID_200HZ,
     )
     args = parser.parse_args()
 

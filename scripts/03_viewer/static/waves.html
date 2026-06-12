@@ -108,7 +108,7 @@
     .canvas-wrap {
       flex: 1;
       position: relative;
-      overflow: hidden;
+      overflow: auto;
       min-height: 0;
     }
     #wave-canvas { display: block; width: 100%; height: 100%; }
@@ -165,6 +165,15 @@
       color: var(--muted);
     }
     .tools .readout strong { color: var(--text); }
+    .legend .swatch {
+      display: inline-block;
+      width: 1.1rem;
+      height: 0;
+      border-top: 2px solid var(--swatch-color);
+      margin-right: 0.25rem;
+      vertical-align: middle;
+    }
+    .legend .swatch.dashed { border-top-style: dashed; }
     .bottom {
       background: var(--panel);
       border-top: 1px solid var(--border);
@@ -251,6 +260,10 @@
           <h2>Signals</h2>
           <div class="readout" id="signal-readout">Loading…</div>
         </section>
+        <section>
+          <h2>Gait events</h2>
+          <div class="readout legend" id="marker-legend">—</div>
+        </section>
       </aside>
     </div>
 
@@ -272,9 +285,21 @@
 
   <script>
     const LANE_H = 28;
-    const EMPTY_LANES = 8;
+    const EMPTY_LANES = 2;
     const SIGNAL_COLORS = {
       lf_position_z: "#4ec9b0",
+      rf_position_z: "#6a9fb5",
+      head_roll: "#c586c0",
+      head_pitch: "#dcdcaa",
+      head_yaw: "#9cdcfe",
+      gaze_x: "#ce9178",
+      gaze_y: "#d7ba7d",
+    };
+    const MARKER_STYLES = {
+      lf_IC: { color: "#4ec9b0", dash: [] },
+      lf_TO: { color: "#4ec9b0", dash: [4, 3] },
+      rf_IC: { color: "#6a9fb5", dash: [] },
+      rf_TO: { color: "#6a9fb5", dash: [4, 3] },
     };
 
     const sessionId = (() => {
@@ -293,7 +318,9 @@
       cursorS: null,
       cursorMode: true,
       signals: [],
+      markers: [],
       signalLoadError: null,
+      waveMissing: [],
     };
 
     const $ = (id) => document.getElementById(id);
@@ -330,7 +357,7 @@
       const wrap = $("canvas-wrap");
       const dpr = window.devicePixelRatio || 1;
       const w = wrap.clientWidth;
-      const h = wrap.clientHeight;
+      const h = Math.max(wrap.clientHeight, laneCount() * LANE_H);
       waveCanvas.width = Math.max(1, Math.floor(w * dpr));
       waveCanvas.height = Math.max(1, Math.floor(h * dpr));
       waveCanvas.style.width = `${w}px`;
@@ -364,6 +391,26 @@
       return steps.find((s) => s >= raw) || 60;
     }
 
+    function drawGaitMarkers(ctx, w, height, { top = 0 } = {}) {
+      if (!state.markers.length) return;
+      const winEnd = state.viewStartS + state.viewDurationS;
+      for (const marker of state.markers) {
+        const t = marker.time_s;
+        if (t < state.viewStartS - 1e-6 || t > winEnd + 1e-6) continue;
+        const style = MARKER_STYLES[`${marker.foot}_${marker.event}`];
+        if (!style) continue;
+        const x = timeToX(t, w) + 0.5;
+        ctx.strokeStyle = style.color;
+        ctx.lineWidth = 1;
+        ctx.setLineDash(style.dash);
+        ctx.beginPath();
+        ctx.moveTo(x, top);
+        ctx.lineTo(x, height);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+    }
+
     function drawRuler() {
       const w = rulerCanvas.clientWidth;
       const h = 26;
@@ -383,6 +430,7 @@
         rulerCtx.stroke();
         rulerCtx.fillText(fmtTimeS(t), x + 3, 12);
       }
+      drawGaitMarkers(rulerCtx, w, h);
     }
 
     function laneCount() {
@@ -396,6 +444,7 @@
         const t = times[i];
         const tNext = i + 1 < times.length ? times[i + 1] : t1;
         if (tNext < t0 || t > t1) continue;
+        if (values[i] == null || !Number.isFinite(values[i])) continue;
         vmin = Math.min(vmin, values[i]);
         vmax = Math.max(vmax, values[i]);
       }
@@ -469,8 +518,13 @@
       ctx.beginPath();
       let started = false;
       for (let i = 0; i < plot.times.length; i++) {
+        const v = plot.values[i];
+        if (v == null || !Number.isFinite(v)) {
+          started = false;
+          continue;
+        }
         const x = timeToX(plot.times[i], w);
-        const y = valueToLaneY(laneIdx, plot.values[i], vmin, vmax);
+        const y = valueToLaneY(laneIdx, v, vmin, vmax);
         if (!started) {
           ctx.moveTo(x, y);
           started = true;
@@ -503,8 +557,14 @@
       const times = signal.times_s;
       const values = signal.values;
       if (!times?.length) return null;
-      if (tS <= times[0]) return { value: values[0], time: tS };
-      if (tS >= times[times.length - 1]) return { value: values[values.length - 1], time: tS };
+      if (tS <= times[0]) {
+        const v0 = values[0];
+        return v0 == null || !Number.isFinite(v0) ? null : { value: v0, time: tS };
+      }
+      if (tS >= times[times.length - 1]) {
+        const vn = values[values.length - 1];
+        return vn == null || !Number.isFinite(vn) ? null : { value: vn, time: tS };
+      }
       let lo = 0;
       let hi = times.length - 1;
       while (lo + 1 < hi) {
@@ -512,9 +572,14 @@
         if (times[mid] <= tS) lo = mid;
         else hi = mid;
       }
+      const vLo = values[lo];
+      const vHi = values[hi];
+      if (vLo == null || vHi == null || !Number.isFinite(vLo) || !Number.isFinite(vHi)) {
+        return null;
+      }
       const span = times[hi] - times[lo];
       const frac = span > 0 ? (tS - times[lo]) / span : 0;
-      return { value: values[lo] + frac * (values[hi] - values[lo]), time: tS };
+      return { value: vLo + frac * (vHi - vLo), time: tS };
     }
 
     function drawWaves() {
@@ -549,13 +614,16 @@
 
       state.signals.forEach((signal, idx) => drawSignalLane(waveCtx, idx, signal, w));
 
+      drawGaitMarkers(waveCtx, w, laneCount() * LANE_H);
+
       if (state.cursorS != null) {
         const cx = timeToX(state.cursorS, w);
+        const laneH = laneCount() * LANE_H;
         waveCtx.strokeStyle = "#f44747";
         waveCtx.lineWidth = 1;
         waveCtx.beginPath();
         waveCtx.moveTo(cx + 0.5, 0);
-        waveCtx.lineTo(cx + 0.5, h);
+        waveCtx.lineTo(cx + 0.5, laneH);
         waveCtx.stroke();
       }
     }
@@ -606,28 +674,54 @@
         <div><strong>Span</strong> ${fmtTimeS(state.viewDurationS)}</div>
       `;
 
-      const lf = state.signals.find((s) => s.id === "lf_position_z");
-      let signalText = "—";
-      if (lf && state.cursorS != null) {
-        const hit = interpolateAtTime(lf, state.cursorS);
-        if (hit) {
-          signalText = `${(hit.value * 100).toFixed(2)} cm`;
-        }
+      function fmtSignalValue(signal, value) {
+        if (value == null || !Number.isFinite(value)) return "—";
+        if (signal.unit === "m") return `${(value * 100).toFixed(2)} cm`;
+        if (signal.unit === "deg") return `${value.toFixed(2)}°`;
+        if (signal.unit === "px") return `${value.toFixed(1)} px`;
+        return String(value);
       }
+
       if (state.signalLoadError) {
         $("signal-readout").innerHTML = `<div style="color:#f44747">${state.signalLoadError}</div>`;
       } else if (state.signals.length) {
-        $("signal-readout").innerHTML = state.signals.map((s) => {
-            const n = s.stride_index ? `${s.times_s.length} strides` : `${s.times_s.length.toLocaleString()} samples`;
-            return `<div><strong>${s.label}</strong> (${s.unit}) · ${n}</div>`;
-          }).join("")
-          + (state.cursorS != null ? `<div style="margin-top:0.35rem"><strong>At cursor</strong> ${signalText}</div>` : "");
+        let html = state.signals.map((s) => {
+          const n = s.stride_index ? `${s.times_s.length} strides` : `${s.times_s.length.toLocaleString()} samples`;
+          return `<div><strong>${s.label}</strong> (${s.unit}) · ${n}</div>`;
+        }).join("");
+        if (state.waveMissing?.length) {
+          html += `<div class="muted" style="margin-top:0.35rem">Missing: ${state.waveMissing.join(", ")}</div>`;
+        }
+        if (state.cursorS != null) {
+          html += `<div style="margin-top:0.35rem"><strong>At cursor</strong></div>`;
+          for (const s of state.signals) {
+            const hit = interpolateAtTime(s, state.cursorS);
+            html += `<div>${s.label}: ${fmtSignalValue(s, hit?.value)}</div>`;
+          }
+        }
+        $("signal-readout").innerHTML = html;
       } else {
         $("signal-readout").textContent = "No signals loaded";
       }
 
       $("status-left").textContent = `UTC ns ${fmtUtcNs(state.tStartNs)} … ${fmtUtcNs(state.tEndNs)}`;
       $("status-right").textContent = `${state.fsHz} Hz · ${state.nGrid.toLocaleString()} samples · ${fmtTimeS(state.durationS)} total`;
+
+      if (state.markers.length) {
+        const rows = [
+          ["lf_IC", "LF IC"],
+          ["lf_TO", "LF TO"],
+          ["rf_IC", "RF IC"],
+          ["rf_TO", "RF TO"],
+        ];
+        $("marker-legend").innerHTML = rows.map(([key, label]) => {
+          const style = MARKER_STYLES[key];
+          const dash = style.dash.length ? " dashed" : "";
+          return `<div><span class="swatch${dash}" style="--swatch-color:${style.color}"></span>${label}</div>`;
+        }).join("") + `<div style="margin-top:0.35rem">${state.markers.length.toLocaleString()} events</div>`;
+      } else {
+        $("marker-legend").textContent = "No gait events (run gait analysis)";
+      }
     }
 
     function buildNameRows() {
@@ -671,17 +765,22 @@
         `${sessionId} · ${data.run_label || "—"} · ${fmtTimeS(state.durationS)}`;
 
       const sigRes = await fetch(
-        `/api/sessions/${encodeURIComponent(sessionId)}/waves/lf_position_z`,
+        `/api/sessions/${encodeURIComponent(sessionId)}/waves`,
       );
       if (sigRes.ok) {
-        state.signals = [await sigRes.json()];
+        const bundle = await sigRes.json();
+        state.signals = bundle.signals || [];
+        state.markers = bundle.markers || [];
+        state.waveMissing = bundle.missing || [];
         state.signalLoadError = null;
       } else {
         state.signals = [];
+        state.markers = [];
+        state.waveMissing = [];
         const hint = sigRes.status === 404
           ? "Restart the viewer (<code>uv run python serve_gait_xsens.py</code>) — an old server may still be running."
-          : "Run gait analysis for this session first.";
-        state.signalLoadError = `LF position_z failed (HTTP ${sigRes.status}). ${hint}`;
+          : "Run gait analysis and 01_clean step 5 for this session.";
+        state.signalLoadError = `Wave signals failed (HTTP ${sigRes.status}). ${hint}`;
       }
 
       buildNameRows();

@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>gazeGait — 05_gait_xsens</title>
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --surface: #fff;
+      --border: #d8dee4;
+      --text: #1f2933;
+      --muted: #5c6b7a;
+      --accent: #1d6fa5;
+      --accent-soft: #e8f2fa;
+      --ready: #1f7a4d;
+      --incomplete: #b45309;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.45;
+    }
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 1rem 1.5rem;
+    }
+    header h1 { margin: 0 0 0.25rem; font-size: 1.25rem; }
+    header p { margin: 0; color: var(--muted); font-size: 0.9rem; }
+    main { max-width: 1100px; margin: 0 auto; padding: 1.25rem 1.5rem 2rem; }
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 1rem;
+    }
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+    button, a.button {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      border-radius: 6px;
+      padding: 0.4rem 0.75rem;
+      font: inherit;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-block;
+    }
+    button.primary, a.button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    button:hover, a.button:hover { filter: brightness(0.97); }
+    table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+    th, td {
+      text-align: left;
+      padding: 0.55rem 0.6rem;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    th { color: var(--muted); font-weight: 600; }
+    tr.clickable { cursor: pointer; }
+    tr.clickable:hover { background: var(--accent-soft); }
+    .badge {
+      display: inline-block;
+      padding: 0.1rem 0.45rem;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 600;
+    }
+    .badge.ready { background: #dff5ea; color: var(--ready); }
+    .badge.incomplete { background: #fff3e0; color: var(--incomplete); }
+    .muted { color: var(--muted); }
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+    .meta-card {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.65rem 0.75rem;
+      background: #fafbfc;
+    }
+    .meta-card .label { color: var(--muted); font-size: 0.8rem; }
+    .meta-card .value { font-weight: 600; margin-top: 0.15rem; }
+    h2 { margin: 0 0 0.75rem; font-size: 1rem; }
+    h3 { margin: 1rem 0 0.5rem; font-size: 0.95rem; color: var(--muted); }
+    .columns { font-size: 0.8rem; color: var(--muted); margin-top: 0.2rem; }
+    .error { color: #b42318; }
+    #loading { color: var(--muted); }
+    code { font-size: 0.85em; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>05_gait_xsens</h1>
+    <p id="subtitle">Loading sessions…</p>
+  </header>
+  <main>
+    <div id="loading">Loading…</div>
+    <div id="list-view" hidden>
+      <div class="panel">
+        <table>
+          <thead>
+            <tr>
+              <th>Session</th>
+              <th>Start time</th>
+              <th>Run</th>
+              <th>Duration</th>
+              <th>Gaze valid</th>
+              <th>Files</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="session-rows"></tbody>
+        </table>
+      </div>
+    </div>
+    <div id="detail-view" hidden>
+      <div class="toolbar">
+        <button type="button" id="back-btn">← All sessions</button>
+      </div>
+      <div class="panel" id="detail-summary"></div>
+      <div id="detail-sections"></div>
+    </div>
+    <div id="error-view" class="panel error" hidden></div>
+  </main>
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    function fmtBytes(n) {
+      if (n == null) return "—";
+      const units = ["B", "KB", "MB", "GB"];
+      let v = n, i = 0;
+      while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+      return `${v.toFixed(i ? 1 : 0)} ${units[i]}`;
+    }
+
+    function fmtDuration(s) {
+      if (s == null) return "—";
+      const m = Math.floor(s / 60);
+      const sec = Math.round(s % 60);
+      return m ? `${m}m ${sec}s` : `${sec}s`;
+    }
+
+    function fmtFrac(f) {
+      return f == null ? "—" : `${(f * 100).toFixed(1)}%`;
+    }
+
+    function show(el) { el.hidden = false; }
+    function hide(el) { el.hidden = true; }
+
+    function setError(msg) {
+      hide($("loading"));
+      hide($("list-view"));
+      hide($("detail-view"));
+      $("error-view").textContent = msg;
+      show($("error-view"));
+    }
+
+    async function loadSessions() {
+      const res = await fetch("/api/sessions");
+      if (!res.ok) throw new Error(`Failed to load sessions (${res.status})`);
+      return res.json();
+    }
+
+    async function loadSession(id) {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(id)}`);
+      if (!res.ok) throw new Error(`Failed to load session ${id} (${res.status})`);
+      return res.json();
+    }
+
+    function renderList(data) {
+      $("subtitle").textContent = `${data.session_count} session(s) — ${data.data_root}`;
+      const tbody = $("session-rows");
+      tbody.replaceChildren();
+      for (const s of data.sessions) {
+        const tr = document.createElement("tr");
+        tr.className = "clickable";
+        tr.innerHTML = `
+          <td><code>${s.session_id}</code></td>
+          <td>${s.start_time ?? "—"}</td>
+          <td>${s.run_label ?? "—"}</td>
+          <td>${fmtDuration(s.duration_s)}</td>
+          <td>${fmtFrac(s.gaze_valid_frac)}</td>
+          <td>${s.file_count} · ${fmtBytes(s.total_bytes)}</td>
+          <td><span class="badge ${s.status}">${s.status}</span></td>
+        `;
+        tr.addEventListener("click", () => showDetail(s.session_id));
+        tbody.appendChild(tr);
+      }
+      hide($("loading"));
+      hide($("detail-view"));
+      show($("list-view"));
+    }
+
+    function metaCard(label, value) {
+      return `<div class="meta-card"><div class="label">${label}</div><div class="value">${value}</div></div>`;
+    }
+
+    function renderDetail(d) {
+      $("subtitle").textContent = `Session ${d.session_id}`;
+      const gm = d.grid_meta || {};
+      $("detail-summary").innerHTML = `
+        <h2>${d.session_id}</h2>
+        <div class="meta-grid">
+          ${metaCard("Start time", d.start_time ?? "—")}
+          ${metaCard("Run label", d.run_label ?? "—")}
+          ${metaCard("Status", `<span class="badge ${d.status}">${d.status}</span>`)}
+          ${metaCard("Duration", fmtDuration(gm.duration_s ?? d.duration_s))}
+          ${metaCard("Grid rows", gm.n_grid ?? "—")}
+          ${metaCard("Sample rate", gm.fs_hz ? `${gm.fs_hz} Hz` : "—")}
+          ${metaCard("LF valid", fmtFrac(gm.lf_valid_frac))}
+          ${metaCard("RF valid", fmtFrac(gm.rf_valid_frac))}
+          ${metaCard("Head valid", fmtFrac(gm.head_valid_frac))}
+          ${metaCard("Gaze valid", fmtFrac(gm.gaze_valid_frac))}
+          ${metaCard("Total size", fmtBytes(d.total_bytes))}
+        </div>
+      `;
+
+      const sections = $("detail-sections");
+      sections.replaceChildren();
+      for (const section of d.sections) {
+        const panel = document.createElement("div");
+        panel.className = "panel";
+        let rows = "";
+        for (const f of section.files) {
+          const href = `/api/sessions/${encodeURIComponent(d.session_id)}/files/${encodeURIComponent(f.name)}`;
+          rows += `
+            <tr>
+              <td><a class="button" href="${href}" download>${f.name}</a></td>
+              <td>${fmtBytes(f.size_bytes)}</td>
+              <td>${f.row_count.toLocaleString()}</td>
+              <td class="muted">${f.modified_utc.replace("T", " ").slice(0, 19)} UTC</td>
+              <td class="columns">${f.columns.slice(0, 8).join(", ")}${f.columns.length > 8 ? ", …" : ""}</td>
+            </tr>
+          `;
+        }
+        panel.innerHTML = `
+          <h2>${section.label}</h2>
+          <table>
+            <thead>
+              <tr><th>File</th><th>Size</th><th>Rows</th><th>Modified</th><th>Columns</th></tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        `;
+        sections.appendChild(panel);
+      }
+
+      hide($("loading"));
+      hide($("list-view"));
+      show($("detail-view"));
+    }
+
+    async function showDetail(sessionId) {
+      hide($("error-view"));
+      show($("loading"));
+      try {
+        const detail = await loadSession(sessionId);
+        renderDetail(detail);
+        hide($("loading"));
+      } catch (err) {
+        setError(err.message);
+      }
+    }
+
+    async function showList() {
+      hide($("error-view"));
+      show($("loading"));
+      try {
+        const data = await loadSessions();
+        renderList(data);
+      } catch (err) {
+        setError(err.message);
+      }
+    }
+
+    $("back-btn").addEventListener("click", showList);
+    showList();
+  </script>
+</body>
+</html>

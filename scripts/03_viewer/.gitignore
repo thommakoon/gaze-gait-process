@@ -1,0 +1,14 @@
+# Local data + derived outputs (never commit recordings or generated artifacts)
+data/
+derived/
+figures/
+
+# uv / venv
+.venv/
+
+# Build / cache
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/

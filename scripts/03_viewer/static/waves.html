@@ -17,7 +17,7 @@
       --accent: #4ec9b0;
       --cursor: #f44747;
       --ruler: #569cd6;
-      --tools-w: 200px;
+      --tools-w: 240px;
       --names-w: 180px;
       --lane-h: 28px;
       --bottom-h: 88px;
@@ -174,6 +174,57 @@
       vertical-align: middle;
     }
     .legend .swatch.dashed { border-top-style: dashed; }
+    .y-scale-row {
+      margin-bottom: 0.55rem;
+      padding-bottom: 0.55rem;
+      border-bottom: 1px solid #333;
+    }
+    .y-scale-row:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+    .y-scale-label {
+      font-size: 0.72rem;
+      color: var(--text);
+      margin-bottom: 0.25rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .y-scale-auto {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-size: 0.7rem;
+      color: var(--muted);
+      margin-bottom: 0.25rem;
+    }
+    .y-scale-auto input { accent-color: var(--accent); }
+    .y-scale-inputs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.25rem;
+    }
+    .y-scale-inputs input {
+      width: 100%;
+      padding: 0.2rem 0.3rem;
+      font: inherit;
+      font-size: 0.7rem;
+      background: #1a1a1a;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+    }
+    .y-scale-inputs input:disabled { opacity: 0.45; }
+    .y-scale-fit {
+      margin-top: 0.2rem;
+      padding: 0;
+      border: none;
+      background: none;
+      color: var(--accent);
+      font: inherit;
+      font-size: 0.68rem;
+      cursor: pointer;
+      text-align: left;
+    }
+    .y-scale-fit:hover { text-decoration: underline; }
     .bottom {
       background: var(--panel);
       border-top: 1px solid var(--border);
@@ -257,6 +308,11 @@
           </div>
         </section>
         <section>
+          <h2>Y scale</h2>
+          <button type="button" id="btn-y-auto-all">Auto all</button>
+          <div id="y-scale-rows"></div>
+        </section>
+        <section>
           <h2>Signals</h2>
           <div class="readout" id="signal-readout">Loading…</div>
         </section>
@@ -292,8 +348,15 @@
       head_roll: "#c586c0",
       head_pitch: "#dcdcaa",
       head_yaw: "#9cdcfe",
+      head_roll_rate: "#a86fa3",
+      head_pitch_rate: "#b8b87a",
+      head_yaw_rate: "#7eb8d8",
       gaze_x: "#ce9178",
       gaze_y: "#d7ba7d",
+      gaze_azimuth: "#f48771",
+      gaze_elevation: "#cca700",
+      gaze_azimuth_rate: "#d96a55",
+      gaze_elevation_rate: "#b89200",
     };
     const MARKER_STYLES = {
       lf_IC: { color: "#4ec9b0", dash: [] },
@@ -321,6 +384,7 @@
       markers: [],
       signalLoadError: null,
       waveMissing: [],
+      yScale: {},
     };
 
     const $ = (id) => document.getElementById(id);
@@ -448,6 +512,21 @@
         vmin = Math.min(vmin, values[i]);
         vmax = Math.max(vmax, values[i]);
       }
+      return padValueRange(vmin, vmax);
+    }
+
+    function valueRangeFullData(times, values) {
+      let vmin = Infinity;
+      let vmax = -Infinity;
+      for (let i = 0; i < values.length; i++) {
+        if (values[i] == null || !Number.isFinite(values[i])) continue;
+        vmin = Math.min(vmin, values[i]);
+        vmax = Math.max(vmax, values[i]);
+      }
+      return padValueRange(vmin, vmax);
+    }
+
+    function padValueRange(vmin, vmax) {
       if (!Number.isFinite(vmin)) return { vmin: 0, vmax: 1 };
       if (vmin === vmax) {
         const pad = Math.max(Math.abs(vmin) * 0.1, 0.01);
@@ -455,6 +534,50 @@
       }
       const pad = (vmax - vmin) * 0.08;
       return { vmin: vmin - pad, vmax: vmax + pad };
+    }
+
+    function ensureYScale(signalId) {
+      if (!state.yScale[signalId]) {
+        state.yScale[signalId] = { auto: true, ymin: "", ymax: "" };
+      }
+      return state.yScale[signalId];
+    }
+
+    function signalValueRange(signal) {
+      const t0 = state.viewStartS;
+      const t1 = state.viewStartS + state.viewDurationS;
+      const ys = ensureYScale(signal.id);
+      if (ys.auto) {
+        return valueRangeInWindow(signal.times_s, signal.values, t0, t1);
+      }
+      let vmin = Number(ys.ymin);
+      let vmax = Number(ys.ymax);
+      if (!Number.isFinite(vmin) || !Number.isFinite(vmax)) {
+        return valueRangeInWindow(signal.times_s, signal.values, t0, t1);
+      }
+      if (vmin > vmax) [vmin, vmax] = [vmax, vmin];
+      return padValueRange(vmin, vmax);
+    }
+
+    function fmtScaleValue(value, unit) {
+      if (!Number.isFinite(value)) return "";
+      if (unit === "m") return (value * 100).toFixed(1);
+      if (unit === "deg") return value.toFixed(1);
+      if (unit === "deg/s") return value.toFixed(2);
+      if (unit === "px") return value.toFixed(0);
+      return String(value);
+    }
+
+    function parseScaleInput(raw, unit) {
+      const n = Number(raw);
+      if (!Number.isFinite(n)) return null;
+      if (unit === "m") return n / 100;
+      return n;
+    }
+
+    function scaleInputPlaceholder(value, unit) {
+      if (!Number.isFinite(value)) return "—";
+      return fmtScaleValue(value, unit);
     }
 
     function valueToLaneY(laneIdx, value, vmin, vmax) {
@@ -501,7 +624,7 @@
 
       const t0 = state.viewStartS;
       const t1 = state.viewStartS + state.viewDurationS;
-      const { vmin, vmax } = valueRangeInWindow(times, values, t0, t1);
+      const { vmin, vmax } = signalValueRange(signal);
       const color = SIGNAL_COLORS[signal.id] || "#dcdcaa";
       const yBase = laneIdx * LANE_H;
       const isStrideSeries = Array.isArray(signal.stride_index);
@@ -550,7 +673,11 @@
 
       ctx.fillStyle = "#6a9955";
       ctx.font = "10px Consolas, monospace";
-      ctx.fillText(`${vmin.toFixed(3)}–${vmax.toFixed(3)} ${signal.unit || ""}`, 4, yBase + 11);
+      const scaleLabel = ensureYScale(signal.id).auto ? "" : " [fixed]";
+      const rangeText = signal.unit === "m"
+        ? `${fmtScaleValue(vmin, "m")}–${fmtScaleValue(vmax, "m")} cm${scaleLabel}`
+        : `${vmin.toFixed(3)}–${vmax.toFixed(3)} ${signal.unit || ""}${scaleLabel}`;
+      ctx.fillText(rangeText, 4, yBase + 11);
     }
 
     function interpolateAtTime(signal, tS) {
@@ -678,6 +805,7 @@
         if (value == null || !Number.isFinite(value)) return "—";
         if (signal.unit === "m") return `${(value * 100).toFixed(2)} cm`;
         if (signal.unit === "deg") return `${value.toFixed(2)}°`;
+        if (signal.unit === "deg/s") return `${value.toFixed(2)}°/s`;
         if (signal.unit === "px") return `${value.toFixed(1)} px`;
         return String(value);
       }
@@ -687,7 +815,12 @@
       } else if (state.signals.length) {
         let html = state.signals.map((s) => {
           const n = s.stride_index ? `${s.times_s.length} strides` : `${s.times_s.length.toLocaleString()} samples`;
-          return `<div><strong>${s.label}</strong> (${s.unit}) · ${n}</div>`;
+          const meanNote = s.signal_mean != null
+            ? (s.unit === "deg"
+              ? ` · mean ${s.signal_mean.toFixed(2)}°`
+              : ` · mean ${s.signal_mean.toFixed(1)} px`)
+            : "";
+          return `<div><strong>${s.label}</strong> (${s.unit}) · ${n}${meanNote}</div>`;
         }).join("");
         if (state.waveMissing?.length) {
           html += `<div class="muted" style="margin-top:0.35rem">Missing: ${state.waveMissing.join(", ")}</div>`;
@@ -721,6 +854,112 @@
         }).join("") + `<div style="margin-top:0.35rem">${state.markers.length.toLocaleString()} events</div>`;
       } else {
         $("marker-legend").textContent = "No gait events (run gait analysis)";
+      }
+    }
+
+    function setYScaleManual(signal, ymin, ymax) {
+      const ys = ensureYScale(signal.id);
+      ys.auto = false;
+      ys.ymin = fmtScaleValue(ymin, signal.unit);
+      ys.ymax = fmtScaleValue(ymax, signal.unit);
+    }
+
+    function buildYScalePanel() {
+      const container = $("y-scale-rows");
+      container.replaceChildren();
+      const t0 = state.viewStartS;
+      const t1 = state.viewStartS + state.viewDurationS;
+
+      for (const signal of state.signals) {
+        const ys = ensureYScale(signal.id);
+        const autoRange = valueRangeInWindow(signal.times_s, signal.values, t0, t1);
+        const unitHint = signal.unit === "m" ? "cm" : (signal.unit || "");
+
+        const row = document.createElement("div");
+        row.className = "y-scale-row";
+
+        const label = document.createElement("div");
+        label.className = "y-scale-label";
+        label.textContent = signal.label;
+        label.title = signal.label;
+
+        const autoRow = document.createElement("label");
+        autoRow.className = "y-scale-auto";
+        const autoCb = document.createElement("input");
+        autoCb.type = "checkbox";
+        autoCb.checked = ys.auto;
+        autoRow.append(autoCb, document.createTextNode(" Auto (visible window)"));
+
+        const inputs = document.createElement("div");
+        inputs.className = "y-scale-inputs";
+        const yminInput = document.createElement("input");
+        yminInput.type = "number";
+        yminInput.step = "any";
+        yminInput.placeholder = `min ${scaleInputPlaceholder(autoRange.vmin, signal.unit)}`;
+        yminInput.value = ys.auto ? "" : ys.ymin;
+        yminInput.disabled = ys.auto;
+        yminInput.title = unitHint ? `min (${unitHint})` : "min";
+
+        const ymaxInput = document.createElement("input");
+        ymaxInput.type = "number";
+        ymaxInput.step = "any";
+        ymaxInput.placeholder = `max ${scaleInputPlaceholder(autoRange.vmax, signal.unit)}`;
+        ymaxInput.value = ys.auto ? "" : ys.ymax;
+        ymaxInput.disabled = ys.auto;
+        ymaxInput.title = unitHint ? `max (${unitHint})` : "max";
+
+        inputs.append(yminInput, ymaxInput);
+
+        const fitBtn = document.createElement("button");
+        fitBtn.type = "button";
+        fitBtn.className = "y-scale-fit";
+        fitBtn.textContent = "Fit full data";
+
+        const applyManual = () => {
+          const ymin = parseScaleInput(yminInput.value, signal.unit);
+          const ymax = parseScaleInput(ymaxInput.value, signal.unit);
+          if (ymin == null || ymax == null) return;
+          ys.auto = false;
+          ys.ymin = yminInput.value;
+          ys.ymax = ymaxInput.value;
+          autoCb.checked = false;
+          yminInput.disabled = false;
+          ymaxInput.disabled = false;
+          drawAll();
+        };
+
+        autoCb.addEventListener("change", () => {
+          ys.auto = autoCb.checked;
+          yminInput.disabled = ys.auto;
+          ymaxInput.disabled = ys.auto;
+          if (ys.auto) {
+            yminInput.value = "";
+            ymaxInput.value = "";
+          }
+          drawAll();
+        });
+
+        for (const input of [yminInput, ymaxInput]) {
+          input.addEventListener("change", applyManual);
+          input.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") applyManual();
+          });
+        }
+
+        fitBtn.addEventListener("click", () => {
+          const full = valueRangeFullData(signal.times_s, signal.values);
+          setYScaleManual(signal, full.vmin, full.vmax);
+          autoCb.checked = false;
+          ys.auto = false;
+          yminInput.disabled = false;
+          ymaxInput.disabled = false;
+          yminInput.value = ys.ymin;
+          ymaxInput.value = ys.ymax;
+          drawAll();
+        });
+
+        row.append(label, autoRow, inputs, fitBtn);
+        container.appendChild(row);
       }
     }
 
@@ -784,8 +1023,20 @@
       }
 
       buildNameRows();
+      buildYScalePanel();
       resizeCanvases();
     }
+
+    $("btn-y-auto-all").addEventListener("click", () => {
+      for (const signal of state.signals) {
+        const ys = ensureYScale(signal.id);
+        ys.auto = true;
+        ys.ymin = "";
+        ys.ymax = "";
+      }
+      buildYScalePanel();
+      drawAll();
+    });
 
     $("time-scroll").addEventListener("input", (e) => {
       state.viewStartS = Number(e.target.value) / 1000;

@@ -13,6 +13,7 @@ HEAD_MADGWICK = "head_madgwick_200hz.csv"
 GAZE_GRID = "gaze_200hz.csv"
 GRID_META = "grid_200hz_meta.csv"
 IC_MANUAL = GAIT_RESULT / "interim" / "imu_initial_contact_manual.csv"
+FS_HZ = 200
 
 
 def _trajectory_path(subject: str, run: str, side: str) -> str:
@@ -128,6 +129,217 @@ def _load_bundle_columns(
     return out
 
 
+def _interpolate_gaps(values: list[float | None]) -> list[float]:
+    valid_idx = [i for i, v in enumerate(values) if v is not None]
+    if not valid_idx:
+        raise ValueError("no finite samples")
+    out = [0.0] * len(values)
+    first, last = valid_idx[0], valid_idx[-1]
+    for i in range(first):
+        out[i] = float(values[first])  # type: ignore[arg-type]
+    for i in range(last + 1, len(values)):
+        out[i] = float(values[last])  # type: ignore[arg-type]
+    for k, idx in enumerate(valid_idx):
+        out[idx] = float(values[idx])  # type: ignore[arg-type]
+        if k + 1 >= len(valid_idx):
+            break
+        nxt = valid_idx[k + 1]
+        v0 = float(values[idx])  # type: ignore[arg-type]
+        v1 = float(values[nxt])  # type: ignore[arg-type]
+        span = nxt - idx
+        for j in range(idx + 1, nxt):
+            frac = (j - idx) / span
+            out[j] = v0 + frac * (v1 - v0)
+    return out
+
+
+def _unwrap_deg(values: list[float]) -> list[float]:
+    if not values:
+        return values
+    out = [values[0]]
+    for i in range(1, len(values)):
+        delta = values[i] - out[-1]
+        while delta > 180.0:
+            delta -= 360.0
+        while delta < -180.0:
+            delta += 360.0
+        out.append(out[-1] + delta)
+    return out
+
+
+def _gradient_uniform(values: list[float], fs_hz: int) -> list[float]:
+    n = len(values)
+    if n == 0:
+        return []
+    if n == 1:
+        return [0.0]
+    grad = [0.0] * n
+    grad[0] = (values[1] - values[0]) * fs_hz
+    grad[-1] = (values[-1] - values[-2]) * fs_hz
+    for i in range(1, n - 1):
+        grad[i] = (values[i + 1] - values[i - 1]) * 0.5 * fs_hz
+    return grad
+
+
+def _derivative_deg_s(
+    values: list[float | None],
+    *,
+    fs_hz: int = FS_HZ,
+    unwrap: bool = False,
+) -> list[float | None]:
+    if sum(1 for v in values if v is not None) < 2:
+        return [None] * len(values)
+    try:
+        filled = _interpolate_gaps(values)
+    except ValueError:
+        return [None] * len(values)
+    if unwrap:
+        filled = _unwrap_deg(filled)
+    grad = _gradient_uniform(filled, fs_hz)
+    return [None if values[i] is None else grad[i] for i in range(len(values))]
+
+
+def _mean_finite(values: list[float | None]) -> float | None:
+    finite = [v for v in values if v is not None]
+    if not finite:
+        return None
+    return sum(finite) / len(finite)
+
+
+_GAZE_MEAN_CENTERED = (
+    ("gaze_x", "gaze x − mean", "gaze x [px]", "px"),
+    ("gaze_y", "gaze y − mean", "gaze y [px]", "px"),
+    ("gaze_azimuth", "azimuth − mean", "azimuth [deg]", "deg"),
+    ("gaze_elevation", "elevation − mean", "elevation [deg]", "deg"),
+)
+
+
+_HEAD_ANGLE_COLS = (
+    ("head_roll", "head roll", "madgwick roll [deg]"),
+    ("head_pitch", "head pitch", "madgwick pitch [deg]"),
+    ("head_yaw", "head yaw", "madgwick yaw [deg]"),
+)
+
+_HEAD_RATE_COLS = (
+    ("head_roll_rate", "head roll rate", "madgwick roll [deg]"),
+    ("head_pitch_rate", "head pitch rate", "madgwick pitch [deg]"),
+    ("head_yaw_rate", "head yaw rate", "madgwick yaw [deg]"),
+)
+
+_GAZE_RATE_COLS = (
+    ("gaze_azimuth_rate", "azimuth rate", "azimuth [deg]"),
+    ("gaze_elevation_rate", "elevation rate", "elevation [deg]"),
+)
+
+
+def _load_head_signals(session_id: str, *, t_start_ns: int) -> list[dict]:
+    path = GAIT_XSENS / session_id / HEAD_MADGWICK
+    if not path.is_file():
+        return []
+
+    with path.open(encoding="utf-8", newline="") as f:
+        rows = list(csv.DictReader(f))
+
+    if not rows or "t_utc_ns" not in rows[0]:
+        return []
+
+    times_s = [(int(float(row["t_utc_ns"])) - t_start_ns) / 1e9 for row in rows]
+    source = str(path)
+    out: list[dict] = []
+
+    for signal_id, label, col in _HEAD_ANGLE_COLS:
+        if col not in rows[0]:
+            continue
+        values = [_float_or_none(row.get(col, "")) for row in rows]
+        out.append(
+            _series(
+                signal_id=signal_id,
+                label=label,
+                unit="deg",
+                description=f"{HEAD_MADGWICK} → {col}",
+                times_s=times_s,
+                values=values,
+                source=source,
+            )
+        )
+
+    for signal_id, label, col in _HEAD_RATE_COLS:
+        if col not in rows[0]:
+            continue
+        values = [_float_or_none(row.get(col, "")) for row in rows]
+        rates = _derivative_deg_s(values, unwrap=True)
+        out.append(
+            _series(
+                signal_id=signal_id,
+                label=label,
+                unit="deg/s",
+                description=f"d/dt {col} (unwrap + central diff @ {FS_HZ} Hz)",
+                times_s=times_s,
+                values=rates,
+                source=source,
+            )
+        )
+
+    return out
+
+
+def _load_gaze_signals(session_id: str, *, t_start_ns: int) -> list[dict]:
+    """Mean-centered gaze angles plus az/el angular rates."""
+    path = GAIT_XSENS / session_id / GAZE_GRID
+    if not path.is_file():
+        return []
+
+    with path.open(encoding="utf-8", newline="") as f:
+        rows = list(csv.DictReader(f))
+
+    if not rows or "t_utc_ns" not in rows[0]:
+        return []
+
+    times_s = [(int(float(row["t_utc_ns"])) - t_start_ns) / 1e9 for row in rows]
+    source = str(path)
+    out: list[dict] = []
+
+    for signal_id, label, col, unit in _GAZE_MEAN_CENTERED:
+        if col not in rows[0]:
+            continue
+        raw = [_float_or_none(row.get(col, "")) for row in rows]
+        mean = _mean_finite(raw)
+        if mean is None:
+            continue
+        centered = [None if v is None else v - mean for v in raw]
+        out.append(
+            _series(
+                signal_id=signal_id,
+                label=label,
+                unit=unit,
+                description=f"{GAZE_GRID} → {col} − {mean:.3f}",
+                times_s=times_s,
+                values=centered,
+                source=source,
+            )
+            | {"signal_mean": mean}
+        )
+
+    for signal_id, label, col in _GAZE_RATE_COLS:
+        if col not in rows[0]:
+            continue
+        values = [_float_or_none(row.get(col, "")) for row in rows]
+        rates = _derivative_deg_s(values, unwrap=True)
+        out.append(
+            _series(
+                signal_id=signal_id,
+                label=label,
+                unit="deg/s",
+                description=f"d/dt {col} (unwrap + central diff @ {FS_HZ} Hz)",
+                times_s=times_s,
+                values=rates,
+                source=source,
+            )
+        )
+
+    return out
+
+
 def _is_outlier_row(row: dict) -> bool:
     return str(row.get("is_outlier", "")).lower() in ("true", "1", "yes")
 
@@ -236,25 +448,12 @@ def load_session_waves(session_id: str) -> dict:
     if t_start_ns is None:
         missing.append(GRID_META)
     else:
-        head_cols = [
-            ("head_roll", "head roll", "madgwick roll [deg]", "deg"),
-            ("head_pitch", "head pitch", "madgwick pitch [deg]", "deg"),
-            ("head_yaw", "head yaw", "madgwick yaw [deg]", "deg"),
-        ]
-        head_signals = _load_bundle_columns(
-            session_id, HEAD_MADGWICK, head_cols, t_start_ns=t_start_ns
-        )
+        head_signals = _load_head_signals(session_id, t_start_ns=t_start_ns)
         if not head_signals:
             missing.append(HEAD_MADGWICK)
         signals.extend(head_signals)
 
-        gaze_cols = [
-            ("gaze_x", "gaze x", "gaze x [px]", "px"),
-            ("gaze_y", "gaze y", "gaze y [px]", "px"),
-        ]
-        gaze_signals = _load_bundle_columns(
-            session_id, GAZE_GRID, gaze_cols, t_start_ns=t_start_ns
-        )
+        gaze_signals = _load_gaze_signals(session_id, t_start_ns=t_start_ns)
         if not gaze_signals:
             missing.append(GAZE_GRID)
         signals.extend(gaze_signals)

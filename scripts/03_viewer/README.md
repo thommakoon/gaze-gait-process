@@ -26,7 +26,7 @@ Open [http://127.0.0.1:8000/](http://127.0.0.1:8000/) if the browser does not la
   - Per-run figures (trajectory sideview PDF)
   - Subject-wide figures (scatter plots, radar, combined trajectory)
 - **Download / preview** — CSV/JSON download; PNG inline preview; PDF opens in browser.
-- **Wave viewer** — ModelSim-style timeline (`/session/<id>/waves`): LF/RF `position_z`, head Madgwick roll/pitch/yaw, gaze x/y; vertical IC/TO markers from gait analysis.
+- **Wave viewer** — ModelSim-style timeline (`/session/<id>/waves`): LF/RF `position_z`, head Madgwick roll/pitch/yaw (+ rates), mean-centered gaze x/y and azimuth/elevation (+ rates); vertical IC/TO markers; per-signal Y scale (auto or manual min/max).
 
 ## API
 

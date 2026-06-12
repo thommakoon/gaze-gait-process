@@ -26,7 +26,7 @@ Open [http://127.0.0.1:8000/](http://127.0.0.1:8000/) if the browser does not la
   - Per-run figures (trajectory sideview PDF)
   - Subject-wide figures (scatter plots, radar, combined trajectory)
 - **Download / preview** — CSV/JSON download; PNG inline preview; PDF opens in browser.
-- **Wave viewer** — ModelSim-style empty timeline per session (`/session/<id>/waves`): time ruler, scroll bar over full `t_utc_ns` range, zoom/cursor tools.
+- **Wave viewer** — ModelSim-style timeline (`/session/<id>/waves`): scroll/zoom/cursor; **LF position_z** (200 Hz foot height from trajectory).
 
 ## API
 
@@ -36,6 +36,7 @@ Open [http://127.0.0.1:8000/](http://127.0.0.1:8000/) if the browser does not la
 | `GET /api/sessions/{id}` | Full session inventory |
 | `GET /api/sessions/{id}/files/{name}` | Download a bundle file |
 | `GET /api/gait/files/{rel_path}` | Download or view a gait result file |
+| `GET /api/sessions/{id}/waves/lf_position_z` | LF position_z vs time (200 Hz trajectory) |
 
 ## Options
 

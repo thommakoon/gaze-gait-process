@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from _paths import GAIT_RESULT, GAIT_XSENS
 from catalog import build_session_detail, list_sessions
 from gait_catalog import safe_gait_path
+from wave_catalog import load_lf_position_z_series
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -59,6 +60,21 @@ def api_session_detail(session_id: str) -> dict:
 def api_session_file(session_id: str, filename: str) -> FileResponse:
     path = _safe_session_file(session_id, filename)
     return FileResponse(path, filename=filename, media_type=_media_type(path))
+
+
+@app.get("/api/sessions/{session_id}/waves/lf_position_z")
+def api_lf_position_z_wave(session_id: str) -> dict:
+    if not SESSION_ID_RE.match(session_id):
+        raise HTTPException(status_code=400, detail="Invalid session id")
+    if not (GAIT_XSENS / session_id).is_dir():
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    series = load_lf_position_z_series(session_id)
+    if series is None:
+        raise HTTPException(
+            status_code=404,
+            detail="LF position_z not available — run gait analysis for this session",
+        )
+    return series
 
 
 @app.get("/api/gait/files/{rel_path:path}")

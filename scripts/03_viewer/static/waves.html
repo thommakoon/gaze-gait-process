@@ -89,6 +89,8 @@
     }
     .name-row:nth-child(odd) { background: var(--lane-a); }
     .name-row:nth-child(even) { background: var(--lane-b); }
+    .name-row.active { color: var(--accent); }
+    .names-scroll { overflow-y: auto; height: calc(100% - 26px); }
     .wave-area {
       display: flex;
       flex-direction: column;
@@ -217,7 +219,7 @@
     <div class="main">
       <div class="names" id="names-panel">
         <div class="head">Name</div>
-        <div id="name-rows"></div>
+        <div class="names-scroll" id="name-rows"></div>
       </div>
 
       <div class="wave-area">
@@ -247,7 +249,7 @@
         </section>
         <section>
           <h2>Signals</h2>
-          <div class="readout">No signals loaded yet.<br>Add waveforms in a later step.</div>
+          <div class="readout" id="signal-readout">Loading…</div>
         </section>
       </aside>
     </div>
@@ -269,7 +271,11 @@
   </div>
 
   <script>
-    const PLACEHOLDER_LANES = 10;
+    const LANE_H = 28;
+    const EMPTY_LANES = 8;
+    const SIGNAL_COLORS = {
+      lf_position_z: "#4ec9b0",
+    };
 
     const sessionId = (() => {
       const parts = window.location.pathname.split("/").filter(Boolean);
@@ -286,6 +292,8 @@
       viewDurationS: 30,
       cursorS: null,
       cursorMode: true,
+      signals: [],
+      signalLoadError: null,
     };
 
     const $ = (id) => document.getElementById(id);
@@ -377,9 +385,142 @@
       }
     }
 
+    function laneCount() {
+      return Math.max(state.signals.length + EMPTY_LANES, EMPTY_LANES);
+    }
+
+    function valueRangeInWindow(times, values, t0, t1) {
+      let vmin = Infinity;
+      let vmax = -Infinity;
+      for (let i = 0; i < times.length; i++) {
+        const t = times[i];
+        const tNext = i + 1 < times.length ? times[i + 1] : t1;
+        if (tNext < t0 || t > t1) continue;
+        vmin = Math.min(vmin, values[i]);
+        vmax = Math.max(vmax, values[i]);
+      }
+      if (!Number.isFinite(vmin)) return { vmin: 0, vmax: 1 };
+      if (vmin === vmax) {
+        const pad = Math.max(Math.abs(vmin) * 0.1, 0.01);
+        return { vmin: vmin - pad, vmax: vmax + pad };
+      }
+      const pad = (vmax - vmin) * 0.08;
+      return { vmin: vmin - pad, vmax: vmax + pad };
+    }
+
+    function valueToLaneY(laneIdx, value, vmin, vmax) {
+      const top = laneIdx * LANE_H + 3;
+      const bottom = (laneIdx + 1) * LANE_H - 3;
+      const frac = (value - vmin) / (vmax - vmin);
+      return bottom - frac * (bottom - top);
+    }
+
+    function lowerBound(times, t) {
+      let lo = 0;
+      let hi = times.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (times[mid] < t) lo = mid + 1;
+        else hi = mid;
+      }
+      return lo;
+    }
+
+    function sliceWindow(times, values, t0, t1) {
+      const i0 = Math.max(0, lowerBound(times, t0) - 1);
+      const i1 = Math.min(times.length, lowerBound(times, t1) + 1);
+      return { times: times.slice(i0, i1), values: values.slice(i0, i1) };
+    }
+
+    function decimate(times, values, maxPoints) {
+      if (times.length <= maxPoints) return { times, values };
+      const outT = [];
+      const outV = [];
+      const n = times.length;
+      for (let j = 0; j < maxPoints; j++) {
+        const i = Math.min(n - 1, Math.floor((j * (n - 1)) / (maxPoints - 1)));
+        outT.push(times[i]);
+        outV.push(values[i]);
+      }
+      return { times: outT, values: outV };
+    }
+
+    function drawSignalLane(ctx, laneIdx, signal, w) {
+      const times = signal.times_s;
+      const values = signal.values;
+      if (!times?.length) return;
+
+      const t0 = state.viewStartS;
+      const t1 = state.viewStartS + state.viewDurationS;
+      const { vmin, vmax } = valueRangeInWindow(times, values, t0, t1);
+      const color = SIGNAL_COLORS[signal.id] || "#dcdcaa";
+      const yBase = laneIdx * LANE_H;
+      const isStrideSeries = Array.isArray(signal.stride_index);
+
+      let plot = sliceWindow(times, values, t0, t1);
+      if (!isStrideSeries) {
+        plot = decimate(plot.times, plot.values, Math.max(64, w * 2));
+      }
+
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.lineWidth = isStrideSeries ? 1.5 : 1.25;
+
+      ctx.beginPath();
+      let started = false;
+      for (let i = 0; i < plot.times.length; i++) {
+        const x = timeToX(plot.times[i], w);
+        const y = valueToLaneY(laneIdx, plot.values[i], vmin, vmax);
+        if (!started) {
+          ctx.moveTo(x, y);
+          started = true;
+        } else {
+          ctx.lineTo(x, y);
+        }
+      }
+      if (started) ctx.stroke();
+
+      if (isStrideSeries) {
+        for (let i = 0; i < times.length; i++) {
+          const t = times[i];
+          if (t < t0 - 0.5 || t > t1 + 0.5) continue;
+          const x = timeToX(t, w);
+          const y = valueToLaneY(laneIdx, values[i], vmin, vmax);
+          const outlier = signal.is_outlier && signal.is_outlier[i];
+          ctx.beginPath();
+          ctx.fillStyle = outlier ? "#ce9178" : color;
+          ctx.arc(x, y, outlier ? 2.5 : 2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      ctx.fillStyle = "#6a9955";
+      ctx.font = "10px Consolas, monospace";
+      ctx.fillText(`${vmin.toFixed(3)}–${vmax.toFixed(3)} ${signal.unit || ""}`, 4, yBase + 11);
+    }
+
+    function interpolateAtTime(signal, tS) {
+      const times = signal.times_s;
+      const values = signal.values;
+      if (!times?.length) return null;
+      if (tS <= times[0]) return { value: values[0], time: tS };
+      if (tS >= times[times.length - 1]) return { value: values[values.length - 1], time: tS };
+      let lo = 0;
+      let hi = times.length - 1;
+      while (lo + 1 < hi) {
+        const mid = (lo + hi) >> 1;
+        if (times[mid] <= tS) lo = mid;
+        else hi = mid;
+      }
+      const span = times[hi] - times[lo];
+      const frac = span > 0 ? (tS - times[lo]) / span : 0;
+      return { value: values[lo] + frac * (values[hi] - values[lo]), time: tS };
+    }
+
     function drawWaves() {
       const w = waveCanvas.clientWidth;
       const h = waveCanvas.clientHeight;
+      const lanes = laneCount();
       waveCtx.fillStyle = "#1e1e1e";
       waveCtx.fillRect(0, 0, w, h);
 
@@ -395,16 +536,18 @@
         waveCtx.stroke();
       }
 
-      for (let i = 0; i < PLACEHOLDER_LANES; i++) {
-        const y = i * 28;
+      for (let i = 0; i < lanes; i++) {
+        const y = i * LANE_H;
         waveCtx.fillStyle = i % 2 === 0 ? "#2d2d30" : "#333337";
-        waveCtx.fillRect(0, y, w, 28);
+        waveCtx.fillRect(0, y, w, LANE_H);
         waveCtx.strokeStyle = "#2f2f2f";
         waveCtx.beginPath();
-        waveCtx.moveTo(0, y + 28);
-        waveCtx.lineTo(w, y + 28);
+        waveCtx.moveTo(0, y + LANE_H);
+        waveCtx.lineTo(w, y + LANE_H);
         waveCtx.stroke();
       }
+
+      state.signals.forEach((signal, idx) => drawSignalLane(waveCtx, idx, signal, w));
 
       if (state.cursorS != null) {
         const cx = timeToX(state.cursorS, w);
@@ -462,6 +605,27 @@
         <div><strong>Window</strong> ${fmtTimeS(state.viewStartS)} – ${fmtTimeS(winEnd)}</div>
         <div><strong>Span</strong> ${fmtTimeS(state.viewDurationS)}</div>
       `;
+
+      const lf = state.signals.find((s) => s.id === "lf_position_z");
+      let signalText = "—";
+      if (lf && state.cursorS != null) {
+        const hit = interpolateAtTime(lf, state.cursorS);
+        if (hit) {
+          signalText = `${(hit.value * 100).toFixed(2)} cm`;
+        }
+      }
+      if (state.signalLoadError) {
+        $("signal-readout").innerHTML = `<div style="color:#f44747">${state.signalLoadError}</div>`;
+      } else if (state.signals.length) {
+        $("signal-readout").innerHTML = state.signals.map((s) => {
+            const n = s.stride_index ? `${s.times_s.length} strides` : `${s.times_s.length.toLocaleString()} samples`;
+            return `<div><strong>${s.label}</strong> (${s.unit}) · ${n}</div>`;
+          }).join("")
+          + (state.cursorS != null ? `<div style="margin-top:0.35rem"><strong>At cursor</strong> ${signalText}</div>` : "");
+      } else {
+        $("signal-readout").textContent = "No signals loaded";
+      }
+
       $("status-left").textContent = `UTC ns ${fmtUtcNs(state.tStartNs)} … ${fmtUtcNs(state.tEndNs)}`;
       $("status-right").textContent = `${state.fsHz} Hz · ${state.nGrid.toLocaleString()} samples · ${fmtTimeS(state.durationS)} total`;
     }
@@ -469,10 +633,15 @@
     function buildNameRows() {
       const container = $("name-rows");
       container.replaceChildren();
-      for (let i = 0; i < PLACEHOLDER_LANES; i++) {
+      const lanes = laneCount();
+      for (let i = 0; i < lanes; i++) {
         const row = document.createElement("div");
-        row.className = "name-row";
-        row.textContent = `— empty lane ${i + 1} —`;
+        row.className = "name-row" + (i < state.signals.length ? " active" : "");
+        if (i < state.signals.length) {
+          row.textContent = state.signals[i].label;
+        } else {
+          row.textContent = `— empty lane ${i - state.signals.length + 1} —`;
+        }
         container.appendChild(row);
       }
     }
@@ -500,6 +669,21 @@
 
       $("header-meta").textContent =
         `${sessionId} · ${data.run_label || "—"} · ${fmtTimeS(state.durationS)}`;
+
+      const sigRes = await fetch(
+        `/api/sessions/${encodeURIComponent(sessionId)}/waves/lf_position_z`,
+      );
+      if (sigRes.ok) {
+        state.signals = [await sigRes.json()];
+        state.signalLoadError = null;
+      } else {
+        state.signals = [];
+        const hint = sigRes.status === 404
+          ? "Restart the viewer (<code>uv run python serve_gait_xsens.py</code>) — an old server may still be running."
+          : "Run gait analysis for this session first.";
+        state.signalLoadError = `LF position_z failed (HTTP ${sigRes.status}). ${hint}`;
+      }
+
       buildNameRows();
       resizeCanvases();
     }

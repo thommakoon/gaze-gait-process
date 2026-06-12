@@ -92,6 +92,7 @@ Output `data/05_gait_xsens/<session>/`:
 - `LF.csv`, `RF.csv` — Xsens format for [imu_gait_analysis](https://github.com/Linn39/imu_gait_analysis)
 - `gaze_200hz.csv`, `head_200hz.csv`, `grid_200hz_meta.csv` — from `03_grid_200hz`
 - `LF_imu_fused_*_200hz.csv`, `RF_imu_fused_*_200hz.csv` — aligned foot streams (`t_utc_ns`)
+- `head_madgwick_200hz.csv` — head roll/pitch/yaw from accel + gyro (Madgwick 6-DOF, same step)
 
 ## Validation plots
 

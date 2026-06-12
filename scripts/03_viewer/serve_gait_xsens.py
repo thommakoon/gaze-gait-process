@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local web viewer for ``data/05_gait_xsens`` session bundles.
+"""Local web viewer for ``05_gait_xsens`` bundles and gait analysis results.
 
 Usage (from scripts/03_viewer/):
     uv sync
@@ -18,18 +18,28 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from _paths import GAIT_XSENS
+from _paths import GAIT_RESULT, GAIT_XSENS
 from catalog import build_session_detail, list_sessions
+from gait_catalog import safe_gait_path
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
-app = FastAPI(title="gazeGait — 05_gait_xsens viewer", version="0.1.0")
+app = FastAPI(title="gazeGait data viewer", version="0.2.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/session/{session_id}/waves")
+def waves_view(session_id: str) -> FileResponse:
+    if not SESSION_ID_RE.match(session_id):
+        raise HTTPException(status_code=400, detail="Invalid session id")
+    if not (GAIT_XSENS / session_id).is_dir():
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    return FileResponse(STATIC_DIR / "waves.html")
 
 
 @app.get("/api/sessions")
@@ -48,7 +58,18 @@ def api_session_detail(session_id: str) -> dict:
 @app.get("/api/sessions/{session_id}/files/{filename}")
 def api_session_file(session_id: str, filename: str) -> FileResponse:
     path = _safe_session_file(session_id, filename)
-    return FileResponse(path, filename=filename, media_type="text/csv")
+    return FileResponse(path, filename=filename, media_type=_media_type(path))
+
+
+@app.get("/api/gait/files/{rel_path:path}")
+def api_gait_file(rel_path: str) -> FileResponse:
+    try:
+        path = safe_gait_path(rel_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"Gait file not found: {rel_path}") from exc
+    return FileResponse(path, filename=path.name, media_type=_media_type(path))
 
 
 def _safe_session_file(session_id: str, filename: str) -> Path:
@@ -73,6 +94,21 @@ def _safe_session_file(session_id: str, filename: str) -> Path:
 
 SESSION_ID_RE = re.compile(r"^\d{8}_\d{6}$")
 
+_MEDIA_TYPES = {
+    ".csv": "text/csv",
+    ".json": "application/json",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".pdf": "application/pdf",
+}
+
+
+def _media_type(path: Path) -> str:
+    return _MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream")
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -82,7 +118,8 @@ def main() -> None:
     args = parser.parse_args()
 
     url = f"http://{args.host}:{args.port}/"
-    print(f"Serving {GAIT_XSENS.resolve()}")
+    print(f"Sessions: {GAIT_XSENS.resolve()}")
+    print(f"Gait results: {GAIT_RESULT.resolve()}")
     print(f"Open {url}")
 
     if args.open:

@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wave viewer — gazeGait</title>
+  <style>
+    :root {
+      --bg: #1e1e1e;
+      --panel: #252526;
+      --lane-a: #2d2d30;
+      --lane-b: #333337;
+      --border: #3f3f46;
+      --grid: #454545;
+      --text: #d4d4d4;
+      --muted: #9a9a9a;
+      --accent: #4ec9b0;
+      --cursor: #f44747;
+      --ruler: #569cd6;
+      --tools-w: 200px;
+      --names-w: 180px;
+      --lane-h: 28px;
+      --bottom-h: 88px;
+      --header-h: 44px;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      font-family: Consolas, "Cascadia Mono", "Segoe UI", monospace;
+      background: var(--bg);
+      color: var(--text);
+      overflow: hidden;
+    }
+    .app {
+      display: grid;
+      grid-template-rows: var(--header-h) 1fr var(--bottom-h);
+      height: 100vh;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 0 0.75rem;
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      font-size: 0.85rem;
+    }
+    header h1 { margin: 0; font-size: 0.95rem; font-weight: 600; }
+    header .meta { color: var(--muted); }
+    a.btn {
+      color: var(--text);
+      text-decoration: none;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 0.25rem 0.55rem;
+      background: #2a2a2a;
+      font-size: 0.8rem;
+    }
+    a.btn:hover { background: #353535; }
+    .main {
+      display: grid;
+      grid-template-columns: var(--names-w) 1fr var(--tools-w);
+      min-height: 0;
+      overflow: hidden;
+    }
+    .names {
+      background: var(--panel);
+      border-right: 1px solid var(--border);
+      overflow: hidden;
+    }
+    .names .head {
+      height: 26px;
+      border-bottom: 1px solid var(--border);
+      padding: 0.35rem 0.5rem;
+      font-size: 0.72rem;
+      color: var(--muted);
+      background: #2a2a2a;
+    }
+    .name-row {
+      height: var(--lane-h);
+      line-height: var(--lane-h);
+      padding: 0 0.5rem;
+      font-size: 0.75rem;
+      border-bottom: 1px solid #2f2f2f;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--muted);
+    }
+    .name-row:nth-child(odd) { background: var(--lane-a); }
+    .name-row:nth-child(even) { background: var(--lane-b); }
+    .wave-area {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      min-height: 0;
+    }
+    .ruler-wrap {
+      height: 26px;
+      background: #2a2a2a;
+      border-bottom: 1px solid var(--border);
+      position: relative;
+      overflow: hidden;
+    }
+    #ruler-canvas { display: block; width: 100%; height: 26px; }
+    .canvas-wrap {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+      min-height: 0;
+    }
+    #wave-canvas { display: block; width: 100%; height: 100%; }
+    .cursor-line {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 1px;
+      background: var(--cursor);
+      pointer-events: none;
+      z-index: 2;
+      display: none;
+    }
+    .tools {
+      background: var(--panel);
+      border-left: 1px solid var(--border);
+      padding: 0.5rem;
+      overflow-y: auto;
+      font-size: 0.78rem;
+    }
+    .tools h2 {
+      margin: 0 0 0.5rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .tools section { margin-bottom: 1rem; }
+    .tools button {
+      display: block;
+      width: 100%;
+      margin-bottom: 0.35rem;
+      padding: 0.35rem 0.5rem;
+      font: inherit;
+      font-size: 0.78rem;
+      background: #2a2a2a;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      cursor: pointer;
+      text-align: left;
+    }
+    .tools button:hover { background: #353535; }
+    .tools button.active { border-color: var(--accent); color: var(--accent); }
+    .tools .readout {
+      margin-top: 0.35rem;
+      padding: 0.35rem;
+      background: #1a1a1a;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      font-size: 0.72rem;
+      line-height: 1.5;
+      color: var(--muted);
+    }
+    .tools .readout strong { color: var(--text); }
+    .bottom {
+      background: var(--panel);
+      border-top: 1px solid var(--border);
+      padding: 0.45rem 0.75rem 0.55rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+    .scroll-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+    .scroll-row input[type="range"] {
+      flex: 1;
+      accent-color: var(--accent);
+    }
+    .minimap {
+      position: relative;
+      height: 18px;
+      background: #1a1a1a;
+      border: 1px solid var(--border);
+      border-radius: 2px;
+    }
+    .minimap-viewport {
+      position: absolute;
+      top: 1px;
+      bottom: 1px;
+      background: rgba(78, 201, 176, 0.25);
+      border: 1px solid var(--accent);
+      border-radius: 1px;
+      min-width: 4px;
+    }
+    .status-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <a class="btn" id="back-link" href="/">← Session</a>
+      <h1>Wave viewer</h1>
+      <span class="meta" id="header-meta">Loading…</span>
+    </header>
+
+    <div class="main">
+      <div class="names" id="names-panel">
+        <div class="head">Name</div>
+        <div id="name-rows"></div>
+      </div>
+
+      <div class="wave-area">
+        <div class="ruler-wrap">
+          <canvas id="ruler-canvas"></canvas>
+        </div>
+        <div class="canvas-wrap" id="canvas-wrap">
+          <canvas id="wave-canvas"></canvas>
+          <div class="cursor-line" id="cursor-line"></div>
+        </div>
+      </div>
+
+      <aside class="tools">
+        <section>
+          <h2>View</h2>
+          <button type="button" id="btn-zoom-in">Zoom in</button>
+          <button type="button" id="btn-zoom-out">Zoom out</button>
+          <button type="button" id="btn-fit">Fit full timeline</button>
+        </section>
+        <section>
+          <h2>Cursor</h2>
+          <button type="button" id="btn-cursor" class="active">Time cursor</button>
+          <div class="readout" id="cursor-readout">
+            <div><strong>Cursor</strong> —</div>
+            <div><strong>Window</strong> —</div>
+          </div>
+        </section>
+        <section>
+          <h2>Signals</h2>
+          <div class="readout">No signals loaded yet.<br>Add waveforms in a later step.</div>
+        </section>
+      </aside>
+    </div>
+
+    <div class="bottom">
+      <div class="scroll-row">
+        <span id="scroll-label-start">0 s</span>
+        <input type="range" id="time-scroll" min="0" max="1000" value="0" step="1">
+        <span id="scroll-label-end">—</span>
+      </div>
+      <div class="minimap" id="minimap">
+        <div class="minimap-viewport" id="minimap-viewport"></div>
+      </div>
+      <div class="status-row">
+        <span id="status-left">t_start —</span>
+        <span id="status-right">Sample rate —</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const PLACEHOLDER_LANES = 10;
+
+    const sessionId = (() => {
+      const parts = window.location.pathname.split("/").filter(Boolean);
+      return parts[0] === "session" ? parts[1] : null;
+    })();
+
+    const state = {
+      tStartNs: 0,
+      tEndNs: 0,
+      durationS: 0,
+      fsHz: 200,
+      nGrid: 0,
+      viewStartS: 0,
+      viewDurationS: 30,
+      cursorS: null,
+      cursorMode: true,
+    };
+
+    const $ = (id) => document.getElementById(id);
+    const waveCanvas = $("wave-canvas");
+    const rulerCanvas = $("ruler-canvas");
+    const waveCtx = waveCanvas.getContext("2d");
+    const rulerCtx = rulerCanvas.getContext("2d");
+
+    function fmtTimeS(s) {
+      if (s == null || !Number.isFinite(s)) return "—";
+      if (s >= 60) {
+        const m = Math.floor(s / 60);
+        const r = s - m * 60;
+        return `${m}:${r.toFixed(2).padStart(5, "0")}`;
+      }
+      return `${s.toFixed(3)} s`;
+    }
+
+    function fmtUtcNs(ns) {
+      return `${ns}`;
+    }
+
+    function clampView() {
+      const minDur = Math.min(1, state.durationS || 1);
+      state.viewDurationS = Math.max(minDur, Math.min(state.durationS || minDur, state.viewDurationS));
+      const maxStart = Math.max(0, state.durationS - state.viewDurationS);
+      state.viewStartS = Math.max(0, Math.min(maxStart, state.viewStartS));
+      if (state.cursorS != null) {
+        state.cursorS = Math.max(state.viewStartS, Math.min(state.viewStartS + state.viewDurationS, state.cursorS));
+      }
+    }
+
+    function resizeCanvases() {
+      const wrap = $("canvas-wrap");
+      const dpr = window.devicePixelRatio || 1;
+      const w = wrap.clientWidth;
+      const h = wrap.clientHeight;
+      waveCanvas.width = Math.max(1, Math.floor(w * dpr));
+      waveCanvas.height = Math.max(1, Math.floor(h * dpr));
+      waveCanvas.style.width = `${w}px`;
+      waveCanvas.style.height = `${h}px`;
+      waveCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      const rw = wrap.clientWidth;
+      rulerCanvas.width = Math.max(1, Math.floor(rw * dpr));
+      rulerCanvas.height = Math.floor(26 * dpr);
+      rulerCanvas.style.width = `${rw}px`;
+      rulerCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      drawAll();
+    }
+
+    function timeToX(tS, width) {
+      const rel = (tS - state.viewStartS) / state.viewDurationS;
+      return rel * width;
+    }
+
+    function xToTime(x, width) {
+      return state.viewStartS + (x / width) * state.viewDurationS;
+    }
+
+    function pickGridStep() {
+      const targetPx = 80;
+      const w = waveCanvas.clientWidth || 800;
+      const secPerPx = state.viewDurationS / w;
+      const raw = secPerPx * targetPx;
+      const steps = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 30, 60];
+      return steps.find((s) => s >= raw) || 60;
+    }
+
+    function drawRuler() {
+      const w = rulerCanvas.clientWidth;
+      const h = 26;
+      rulerCtx.fillStyle = "#2a2a2a";
+      rulerCtx.fillRect(0, 0, w, h);
+      const step = pickGridStep();
+      const t0 = Math.ceil(state.viewStartS / step) * step;
+      rulerCtx.fillStyle = "#9a9a9a";
+      rulerCtx.font = "11px Consolas, monospace";
+      rulerCtx.strokeStyle = "#569cd6";
+      rulerCtx.lineWidth = 1;
+      for (let t = t0; t <= state.viewStartS + state.viewDurationS + 1e-9; t += step) {
+        const x = Math.round(timeToX(t, w)) + 0.5;
+        rulerCtx.beginPath();
+        rulerCtx.moveTo(x, 18);
+        rulerCtx.lineTo(x, h);
+        rulerCtx.stroke();
+        rulerCtx.fillText(fmtTimeS(t), x + 3, 12);
+      }
+    }
+
+    function drawWaves() {
+      const w = waveCanvas.clientWidth;
+      const h = waveCanvas.clientHeight;
+      waveCtx.fillStyle = "#1e1e1e";
+      waveCtx.fillRect(0, 0, w, h);
+
+      const step = pickGridStep();
+      const t0 = Math.ceil(state.viewStartS / step) * step;
+      waveCtx.strokeStyle = "#3a3a3a";
+      waveCtx.lineWidth = 1;
+      for (let t = t0; t <= state.viewStartS + state.viewDurationS + 1e-9; t += step) {
+        const x = Math.round(timeToX(t, w)) + 0.5;
+        waveCtx.beginPath();
+        waveCtx.moveTo(x, 0);
+        waveCtx.lineTo(x, h);
+        waveCtx.stroke();
+      }
+
+      for (let i = 0; i < PLACEHOLDER_LANES; i++) {
+        const y = i * 28;
+        waveCtx.fillStyle = i % 2 === 0 ? "#2d2d30" : "#333337";
+        waveCtx.fillRect(0, y, w, 28);
+        waveCtx.strokeStyle = "#2f2f2f";
+        waveCtx.beginPath();
+        waveCtx.moveTo(0, y + 28);
+        waveCtx.lineTo(w, y + 28);
+        waveCtx.stroke();
+      }
+
+      if (state.cursorS != null) {
+        const cx = timeToX(state.cursorS, w);
+        waveCtx.strokeStyle = "#f44747";
+        waveCtx.lineWidth = 1;
+        waveCtx.beginPath();
+        waveCtx.moveTo(cx + 0.5, 0);
+        waveCtx.lineTo(cx + 0.5, h);
+        waveCtx.stroke();
+      }
+    }
+
+    function drawAll() {
+      drawRuler();
+      drawWaves();
+      updateCursorOverlay();
+      updateScrollUi();
+      updateReadouts();
+    }
+
+    function updateCursorOverlay() {
+      const line = $("cursor-line");
+      if (state.cursorS == null) {
+        line.style.display = "none";
+        return;
+      }
+      const w = waveCanvas.clientWidth;
+      const x = timeToX(state.cursorS, w);
+      line.style.display = "block";
+      line.style.left = `${x}px`;
+    }
+
+    function updateScrollUi() {
+      const scroll = $("time-scroll");
+      const maxStart = Math.max(0, state.durationS - state.viewDurationS);
+      scroll.max = String(Math.max(0, Math.round(maxStart * 1000)));
+      scroll.step = String(Math.max(1, Math.round(state.viewDurationS * 10)));
+      scroll.value = String(Math.round(state.viewStartS * 1000));
+      $("scroll-label-start").textContent = fmtTimeS(0);
+      $("scroll-label-end").textContent = fmtTimeS(state.durationS);
+
+      const mini = $("minimap");
+      const vp = $("minimap-viewport");
+      const frac = state.durationS > 0 ? state.viewDurationS / state.durationS : 1;
+      const startFrac = state.durationS > 0 ? state.viewStartS / state.durationS : 0;
+      const mw = mini.clientWidth;
+      vp.style.width = `${Math.max(4, frac * mw)}px`;
+      vp.style.left = `${startFrac * (mw - vp.offsetWidth)}px`;
+    }
+
+    function updateReadouts() {
+      const winEnd = state.viewStartS + state.viewDurationS;
+      $("cursor-readout").innerHTML = `
+        <div><strong>Cursor</strong> ${state.cursorS != null ? fmtTimeS(state.cursorS) : "—"}</div>
+        <div><strong>Window</strong> ${fmtTimeS(state.viewStartS)} – ${fmtTimeS(winEnd)}</div>
+        <div><strong>Span</strong> ${fmtTimeS(state.viewDurationS)}</div>
+      `;
+      $("status-left").textContent = `UTC ns ${fmtUtcNs(state.tStartNs)} … ${fmtUtcNs(state.tEndNs)}`;
+      $("status-right").textContent = `${state.fsHz} Hz · ${state.nGrid.toLocaleString()} samples · ${fmtTimeS(state.durationS)} total`;
+    }
+
+    function buildNameRows() {
+      const container = $("name-rows");
+      container.replaceChildren();
+      for (let i = 0; i < PLACEHOLDER_LANES; i++) {
+        const row = document.createElement("div");
+        row.className = "name-row";
+        row.textContent = `— empty lane ${i + 1} —`;
+        container.appendChild(row);
+      }
+    }
+
+    async function loadSession() {
+      if (!sessionId) throw new Error("Missing session id in URL");
+      $("back-link").href = `/?session=${encodeURIComponent(sessionId)}`;
+
+      const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`);
+      if (!res.ok) throw new Error(`Session not found (${res.status})`);
+      const data = await res.json();
+      const gm = data.grid_meta || {};
+      if (!gm.t_start_utc_ns || !gm.duration_s) {
+        throw new Error("Session has no grid_200hz_meta timeline");
+      }
+
+      state.tStartNs = Number(gm.t_start_utc_ns);
+      state.tEndNs = Number(gm.t_end_utc_ns || state.tStartNs);
+      state.durationS = Number(gm.duration_s);
+      state.fsHz = Number(gm.fs_hz || 200);
+      state.nGrid = Number(gm.n_grid || 0);
+      state.viewDurationS = Math.min(30, state.durationS);
+      state.viewStartS = 0;
+      clampView();
+
+      $("header-meta").textContent =
+        `${sessionId} · ${data.run_label || "—"} · ${fmtTimeS(state.durationS)}`;
+      buildNameRows();
+      resizeCanvases();
+    }
+
+    $("time-scroll").addEventListener("input", (e) => {
+      state.viewStartS = Number(e.target.value) / 1000;
+      clampView();
+      drawAll();
+    });
+
+    $("btn-zoom-in").addEventListener("click", () => {
+      const center = state.viewStartS + state.viewDurationS / 2;
+      state.viewDurationS *= 0.5;
+      state.viewStartS = center - state.viewDurationS / 2;
+      clampView();
+      drawAll();
+    });
+
+    $("btn-zoom-out").addEventListener("click", () => {
+      const center = state.viewStartS + state.viewDurationS / 2;
+      state.viewDurationS *= 2;
+      state.viewStartS = center - state.viewDurationS / 2;
+      clampView();
+      drawAll();
+    });
+
+    $("btn-fit").addEventListener("click", () => {
+      state.viewStartS = 0;
+      state.viewDurationS = state.durationS;
+      clampView();
+      drawAll();
+    });
+
+    $("btn-cursor").addEventListener("click", () => {
+      state.cursorMode = !state.cursorMode;
+      $("btn-cursor").classList.toggle("active", state.cursorMode);
+    });
+
+    $("canvas-wrap").addEventListener("click", (e) => {
+      if (!state.cursorMode) return;
+      const rect = waveCanvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      state.cursorS = xToTime(x, rect.width);
+      drawAll();
+    });
+
+    window.addEventListener("resize", resizeCanvases);
+
+    loadSession().catch((err) => {
+      $("header-meta").textContent = err.message;
+      document.body.style.color = "#f44747";
+    });
+  </script>
+</body>
+</html>

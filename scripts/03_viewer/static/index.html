@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>gazeGait — 05_gait_xsens</title>
+  <title>gazeGait data viewer</title>
   <style>
     :root {
       --bg: #f4f6f8;
@@ -15,6 +15,7 @@
       --accent-soft: #e8f2fa;
       --ready: #1f7a4d;
       --incomplete: #b45309;
+      --missing: #8b3a3a;
     }
     * { box-sizing: border-box; }
     body {
@@ -82,6 +83,32 @@
     }
     .badge.ready { background: #dff5ea; color: var(--ready); }
     .badge.incomplete { background: #fff3e0; color: var(--incomplete); }
+    .badge.missing { background: #fde8e8; color: var(--missing); }
+    .figure-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 0.75rem;
+      margin-top: 0.75rem;
+    }
+    .figure-card {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.5rem;
+      background: #fafbfc;
+    }
+    .figure-card img {
+      width: 100%;
+      height: auto;
+      display: block;
+      border-radius: 4px;
+      background: #fff;
+    }
+    .figure-card .caption {
+      margin-top: 0.4rem;
+      font-size: 0.78rem;
+      color: var(--muted);
+      word-break: break-all;
+    }
     .muted { color: var(--muted); }
     .meta-grid {
       display: grid;
@@ -107,7 +134,7 @@
 </head>
 <body>
   <header>
-    <h1>05_gait_xsens</h1>
+    <h1>gazeGait sessions</h1>
     <p id="subtitle">Loading sessions…</p>
   </header>
   <main>
@@ -123,7 +150,8 @@
               <th>Duration</th>
               <th>Gaze valid</th>
               <th>Files</th>
-              <th>Status</th>
+              <th>Bundle</th>
+              <th>Gait</th>
             </tr>
           </thead>
           <tbody id="session-rows"></tbody>
@@ -133,6 +161,7 @@
     <div id="detail-view" hidden>
       <div class="toolbar">
         <button type="button" id="back-btn">← All sessions</button>
+        <a class="button primary" id="wave-btn" href="#" hidden>Wave viewer</a>
       </div>
       <div class="panel" id="detail-summary"></div>
       <div id="detail-sections"></div>
@@ -161,6 +190,18 @@
       return f == null ? "—" : `${(f * 100).toFixed(1)}%`;
     }
 
+    function fmtSpeed(v) {
+      return v == null ? "—" : `${v.toFixed(2)} m/s`;
+    }
+
+    function gaitHref(relPath) {
+      return `/api/gait/files/${relPath.split("/").map(encodeURIComponent).join("/")}`;
+    }
+
+    function sessionHref(sessionId, name) {
+      return `/api/sessions/${encodeURIComponent(sessionId)}/files/${encodeURIComponent(name)}`;
+    }
+
     function show(el) { el.hidden = false; }
     function hide(el) { el.hidden = true; }
 
@@ -185,7 +226,8 @@
     }
 
     function renderList(data) {
-      $("subtitle").textContent = `${data.session_count} session(s) — ${data.data_root}`;
+      $("subtitle").textContent =
+        `${data.session_count} session(s) — bundle: ${data.data_root} · gait: ${data.gait_result_root}`;
       const tbody = $("session-rows");
       tbody.replaceChildren();
       for (const s of data.sessions) {
@@ -199,6 +241,7 @@
           <td>${fmtFrac(s.gaze_valid_frac)}</td>
           <td>${s.file_count} · ${fmtBytes(s.total_bytes)}</td>
           <td><span class="badge ${s.status}">${s.status}</span></td>
+          <td><span class="badge ${s.gait_status}">${s.gait_status}</span>${s.gait_stride_count != null ? ` · ${s.gait_stride_count} strides` : ""}</td>
         `;
         tr.addEventListener("click", () => showDetail(s.session_id));
         tbody.appendChild(tr);
@@ -212,54 +255,130 @@
       return `<div class="meta-card"><div class="label">${label}</div><div class="value">${value}</div></div>`;
     }
 
+    function renderFileTable(files, hrefFn) {
+      const table = document.createElement("table");
+      table.innerHTML = `
+        <thead>
+          <tr><th>File</th><th>Size</th><th>Rows</th><th>Modified</th><th>Columns</th></tr>
+        </thead>
+        <tbody></tbody>
+      `;
+      const tbody = table.querySelector("tbody");
+      for (const f of files) {
+        const href = hrefFn(f);
+        const rowCount = f.row_count != null ? f.row_count.toLocaleString() : "—";
+        const cols = f.columns
+          ? `${f.columns.slice(0, 8).join(", ")}${f.columns.length > 8 ? ", …" : ""}`
+          : "—";
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td><a class="button" href="${href}" ${f.kind === "csv" ? "download" : 'target="_blank"'}>${f.name}</a></td>
+          <td>${fmtBytes(f.size_bytes)}</td>
+          <td>${rowCount}</td>
+          <td class="muted">${f.modified_utc.replace("T", " ").slice(0, 19)} UTC</td>
+          <td class="columns">${cols}</td>
+        `;
+        tbody.appendChild(tr);
+      }
+      return table;
+    }
+
+    function renderFigureGrid(files) {
+      const grid = document.createElement("div");
+      grid.className = "figure-grid";
+      for (const f of files) {
+        const href = gaitHref(f.rel_path);
+        const card = document.createElement("div");
+        card.className = "figure-card";
+        if (f.kind === "image") {
+          const img = document.createElement("img");
+          img.src = href;
+          img.alt = f.name;
+          img.loading = "lazy";
+          card.appendChild(img);
+        } else {
+          const link = document.createElement("a");
+          link.className = "button";
+          link.href = href;
+          link.target = "_blank";
+          link.textContent = "Open PDF";
+          card.appendChild(link);
+        }
+        const cap = document.createElement("div");
+        cap.className = "caption";
+        cap.innerHTML = `<a href="${href}" target="_blank">${f.name}</a>`;
+        card.appendChild(cap);
+        grid.appendChild(card);
+      }
+      return grid;
+    }
+
+    function appendSection(container, title, contentNode) {
+      const panel = document.createElement("div");
+      panel.className = "panel";
+      const h2 = document.createElement("h2");
+      h2.textContent = title;
+      panel.appendChild(h2);
+      panel.appendChild(contentNode);
+      container.appendChild(panel);
+    }
+
     function renderDetail(d) {
       $("subtitle").textContent = `Session ${d.session_id}`;
+      const waveBtn = $("wave-btn");
+      waveBtn.href = `/session/${encodeURIComponent(d.session_id)}/waves`;
+      waveBtn.hidden = false;
       const gm = d.grid_meta || {};
+      const gait = d.gait || {};
+      const agg = gait.gait_aggregate || {};
       $("detail-summary").innerHTML = `
         <h2>${d.session_id}</h2>
         <div class="meta-grid">
           ${metaCard("Start time", d.start_time ?? "—")}
           ${metaCard("Run label", d.run_label ?? "—")}
-          ${metaCard("Status", `<span class="badge ${d.status}">${d.status}</span>`)}
+          ${metaCard("Bundle", `<span class="badge ${d.status}">${d.status}</span>`)}
           ${metaCard("Duration", fmtDuration(gm.duration_s ?? d.duration_s))}
           ${metaCard("Grid rows", gm.n_grid ?? "—")}
           ${metaCard("Sample rate", gm.fs_hz ? `${gm.fs_hz} Hz` : "—")}
-          ${metaCard("LF valid", fmtFrac(gm.lf_valid_frac))}
-          ${metaCard("RF valid", fmtFrac(gm.rf_valid_frac))}
-          ${metaCard("Head valid", fmtFrac(gm.head_valid_frac))}
           ${metaCard("Gaze valid", fmtFrac(gm.gaze_valid_frac))}
-          ${metaCard("Total size", fmtBytes(d.total_bytes))}
+          ${metaCard("Bundle size", fmtBytes(d.total_bytes))}
+          ${metaCard("Gait", `<span class="badge ${gait.gait_status || "missing"}">${gait.gait_status || "missing"}</span>`)}
+          ${metaCard("Gait subject / run", `${gait.gait_subject ?? "—"} / ${gait.gait_run ?? "—"}`)}
+          ${metaCard("Strides (L)", gait.gait_stride_count ?? "—")}
+          ${metaCard("Mean speed", fmtSpeed(agg.speed_avg ?? gait.gait_speed_avg))}
+          ${metaCard("Mean clearance", agg.clearance_avg != null ? `${agg.clearance_avg.toFixed(3)} m` : "—")}
         </div>
       `;
 
       const sections = $("detail-sections");
       sections.replaceChildren();
+
       for (const section of d.sections) {
-        const panel = document.createElement("div");
-        panel.className = "panel";
-        let rows = "";
-        for (const f of section.files) {
-          const href = `/api/sessions/${encodeURIComponent(d.session_id)}/files/${encodeURIComponent(f.name)}`;
-          rows += `
-            <tr>
-              <td><a class="button" href="${href}" download>${f.name}</a></td>
-              <td>${fmtBytes(f.size_bytes)}</td>
-              <td>${f.row_count.toLocaleString()}</td>
-              <td class="muted">${f.modified_utc.replace("T", " ").slice(0, 19)} UTC</td>
-              <td class="columns">${f.columns.slice(0, 8).join(", ")}${f.columns.length > 8 ? ", …" : ""}</td>
-            </tr>
-          `;
+        appendSection(
+          sections,
+          section.label,
+          renderFileTable(section.files, (f) => sessionHref(d.session_id, f.name)),
+        );
+      }
+
+      if (gait.gait_sections && gait.gait_sections.length) {
+        for (const section of gait.gait_sections) {
+          const isFigureSection = section.id.startsWith("gait_figures");
+          if (isFigureSection) {
+            appendSection(sections, section.label, renderFigureGrid(section.files));
+          } else {
+            appendSection(
+              sections,
+              section.label,
+              renderFileTable(section.files, (f) => gaitHref(f.rel_path)),
+            );
+          }
         }
-        panel.innerHTML = `
-          <h2>${section.label}</h2>
-          <table>
-            <thead>
-              <tr><th>File</th><th>Size</th><th>Rows</th><th>Modified</th><th>Columns</th></tr>
-            </thead>
-            <tbody>${rows}</tbody>
-          </table>
-        `;
-        sections.appendChild(panel);
+      } else if (gait.gait_status === "missing") {
+        const note = document.createElement("p");
+        note.className = "muted";
+        note.textContent = "No gait analysis results for this session. Run scripts/02_analysis/run_imu_gait_analysis.py.";
+        appendSection(sections, "Gait analysis", note);
       }
 
       hide($("loading"));
@@ -291,7 +410,13 @@
     }
 
     $("back-btn").addEventListener("click", showList);
-    showList();
+
+    const deepLink = new URLSearchParams(window.location.search).get("session");
+    if (deepLink) {
+      showDetail(deepLink);
+    } else {
+      showList();
+    }
   </script>
 </body>
 </html>

@@ -1,6 +1,7 @@
-# 03_viewer — browse 05_gait_xsens
+# 03_viewer — browse sessions + gait results
 
-Local web UI to inspect gait-analysis session bundles under `data/05_gait_xsens/<session>/`.
+Local web UI for `data/05_gait_xsens/<session>/` bundles and matching
+`data/imu_gait_analysis_result/` outputs (mapped by treadmill run label).
 
 ## Run
 
@@ -14,11 +15,18 @@ Open [http://127.0.0.1:8000/](http://127.0.0.1:8000/) if the browser does not la
 
 ## What it shows
 
-- **Session list** — start time, treadmill run label (`visit3km` etc.), duration, gaze validity, file count, readiness (`LF.csv` + `RF.csv` present).
-- **Session detail** — grid metadata from `grid_200hz_meta.csv`, files grouped as:
+- **Session list** — bundle status, gait status, stride count, run label (`visit3km` etc.).
+- **Session detail — bundle** — grid metadata, files grouped as:
   - Foot IMU (Xsens): `LF.csv`, `RF.csv`
   - Grid companions: gaze/head/meta + fused 200 Hz foot streams
-- **Download** — click a filename to download the CSV.
+  - Head orientation (Madgwick): `head_madgwick_200hz.csv`
+- **Session detail — gait** (session → `visit*km` → `imu_gait_analysis_result`):
+  - Processed stride CSVs (`left_foot_core_params.csv`, …)
+  - Interim trajectory JSON
+  - Per-run figures (trajectory sideview PDF)
+  - Subject-wide figures (scatter plots, radar, combined trajectory)
+- **Download / preview** — CSV/JSON download; PNG inline preview; PDF opens in browser.
+- **Wave viewer** — ModelSim-style empty timeline per session (`/session/<id>/waves`): time ruler, scroll bar over full `t_utc_ns` range, zoom/cursor tools.
 
 ## API
 
@@ -26,7 +34,8 @@ Open [http://127.0.0.1:8000/](http://127.0.0.1:8000/) if the browser does not la
 |----------|-------------|
 | `GET /api/sessions` | All sessions + summary |
 | `GET /api/sessions/{id}` | Full session inventory |
-| `GET /api/sessions/{id}/files/{name}` | Download a CSV |
+| `GET /api/sessions/{id}/files/{name}` | Download a bundle file |
+| `GET /api/gait/files/{rel_path}` | Download or view a gait result file |
 
 ## Options
 

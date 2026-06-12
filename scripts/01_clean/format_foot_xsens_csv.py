@@ -9,6 +9,9 @@ Aligned 200 Hz grid (copied from ``data/03_grid_200hz/<session>/``):
     ``gaze_200hz.csv``, ``head_200hz.csv``, ``grid_200hz_meta.csv``
     ``LF_imu_fused_*_200hz.csv``, ``RF_imu_fused_*_200hz.csv`` (shared ``t_utc_ns``)
 
+Head orientation (derived from ``head_200hz.csv`` accel + gyro):
+    ``head_madgwick_200hz.csv`` — Madgwick 6-DOF roll/pitch/yaw at 200 Hz
+
 Foot conversion source defaults to the grid; ``--source cleaned`` or ``raw`` still
 bundles grid companions when that session exists in ``03_grid_200hz``.
 
@@ -31,6 +34,8 @@ import numpy as np
 import pandas as pd
 
 from _paths import GAIT_XSENS, GRID_200HZ, SOURCE_DIRS
+from head_madgwick import OUT_NAME as HEAD_MADGWICK_NAME
+from head_madgwick import write_head_madgwick_csv
 
 ACC_COLS = ["Acc_X", "Acc_Y", "Acc_Z"]
 GYR_COLS = ["Gyr_X", "Gyr_Y", "Gyr_Z"]
@@ -225,6 +230,15 @@ def write_xsens_csv(
             writer.writerow(format_row(row))
 
 
+def derive_head_madgwick(out_dir: Path, *, beta: float) -> None:
+    head_path = out_dir / "head_200hz.csv"
+    if not head_path.is_file():
+        raise FileNotFoundError(f"Missing {head_path.name} (needed for Madgwick head RPY)")
+    out_path = out_dir / HEAD_MADGWICK_NAME
+    n = write_head_madgwick_csv(head_path, out_path, beta=beta)
+    print(f"  {HEAD_MADGWICK_NAME}: {n:,} rows (beta={beta})")
+
+
 def export_session(
     session_id: str,
     *,
@@ -233,6 +247,8 @@ def export_session(
     firmware: str,
     app_version: str,
     device_suffix: str,
+    beta: float,
+    skip_head_madgwick: bool,
 ) -> Path:
     session_dir = SOURCE_DIRS[source] / session_id
     if not session_dir.is_dir():
@@ -267,6 +283,9 @@ def export_session(
     for name in bundled:
         print(f"  {name}")
 
+    if not skip_head_madgwick:
+        derive_head_madgwick(out_dir, beta=beta)
+
     print(f"Wrote {out_dir}")
     return out_dir
 
@@ -299,6 +318,17 @@ def main() -> None:
         default="3",
         help="DeviceTag suffix, e.g. LF-3 (default matches StrokeGait)",
     )
+    parser.add_argument(
+        "--beta",
+        type=float,
+        default=0.1,
+        help="Madgwick beta for head RPY (default 0.1)",
+    )
+    parser.add_argument(
+        "--no-head-madgwick",
+        action="store_true",
+        help="Skip head_madgwick_200hz.csv derivation",
+    )
     args = parser.parse_args()
 
     errors = 0
@@ -311,6 +341,8 @@ def main() -> None:
                 firmware=args.firmware,
                 app_version=args.app_version,
                 device_suffix=args.device_suffix,
+                beta=args.beta,
+                skip_head_madgwick=args.no_head_madgwick,
             )
         except (FileNotFoundError, ValueError) as e:
             print(f"ERROR {session_id}: {e}", file=sys.stderr)

@@ -6,23 +6,20 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from _paths import GAIT_XSENS, RAW
+from _paths import GAIT_RESULT, GAIT_XSENS
+from gait_catalog import build_gait_detail, build_gait_summary, infer_run_label
 
 SESSION_RE = re.compile(r"^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})$")
 XSENS_METADATA_LINES = 7
 
-RUN_FALLBACK = {
-    "20260606_140415": "visit3km",
-    "20260606_135203": "visit5km",
-    "20260606_141706": "visit7km",
-}
-
 SECTION_XSENS = "xsens_foot"
 SECTION_GRID = "grid_companions"
+SECTION_HEAD_MADGWICK = "head_madgwick"
 
 SECTION_LABELS = {
     SECTION_XSENS: "Foot IMU (Xsens)",
     SECTION_GRID: "Grid companions (200 Hz)",
+    SECTION_HEAD_MADGWICK: "Head orientation (Madgwick)",
 }
 
 
@@ -34,14 +31,6 @@ def parse_session_start(session_id: str) -> str | None:
     return f"{y}-{mo}-{d} {h}:{mi}:{s}"
 
 
-def infer_run_label(session_id: str) -> str | None:
-    raw_dir = RAW / session_id
-    if raw_dir.is_dir():
-        for path in sorted(raw_dir.glob("*km.txt")):
-            return f"visit{path.stem}"
-    return RUN_FALLBACK.get(session_id)
-
-
 def discover_sessions() -> list[str]:
     if not GAIT_XSENS.is_dir():
         return []
@@ -51,6 +40,8 @@ def discover_sessions() -> list[str]:
 def _classify_file(name: str) -> str:
     if name in ("LF.csv", "RF.csv"):
         return SECTION_XSENS
+    if name == "head_madgwick_200hz.csv":
+        return SECTION_HEAD_MADGWICK
     return SECTION_GRID
 
 
@@ -137,6 +128,7 @@ def build_session_summary(session_id: str) -> dict:
         "total_bytes": total_bytes,
         "duration_s": grid_meta.get("duration_s") if grid_meta else None,
         "gaze_valid_frac": grid_meta.get("gaze_valid_frac") if grid_meta else None,
+        **build_gait_summary(session_id),
     }
 
 
@@ -146,21 +138,24 @@ def build_session_detail(session_id: str) -> dict | None:
         return None
 
     files = [_file_info(p) for p in sorted(session_dir.iterdir()) if p.is_file()]
-    sections: dict[str, list[dict]] = {SECTION_XSENS: [], SECTION_GRID: []}
+    section_order = (SECTION_XSENS, SECTION_GRID, SECTION_HEAD_MADGWICK)
+    sections: dict[str, list[dict]] = {sid: [] for sid in section_order}
     for info in files:
         sections[info["section"]].append(info)
 
     section_list = [
         {"id": sid, "label": SECTION_LABELS[sid], "files": sections[sid]}
-        for sid in (SECTION_XSENS, SECTION_GRID)
+        for sid in section_order
         if sections[sid]
     ]
 
     summary = build_session_summary(session_id)
+    gait = build_gait_detail(session_id)
     return {
         **summary,
         "grid_meta": _read_grid_meta(session_dir),
         "sections": section_list,
+        "gait": gait,
     }
 
 
@@ -168,6 +163,7 @@ def list_sessions() -> dict:
     sessions = discover_sessions()
     return {
         "data_root": str(GAIT_XSENS.resolve()),
+        "gait_result_root": str(GAIT_RESULT.resolve()),
         "session_count": len(sessions),
         "sessions": [build_session_summary(sid) for sid in sessions],
     }

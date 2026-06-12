@@ -1,0 +1,6 @@
+[submodule "external/neon-player"]
+	path = external/neon-player
+	url = https://github.com/thommakoon/neon-player-custom-GAIT.git
+[submodule "external/imu_gait_analysis"]
+	path = external/imu_gait_analysis
+	url = https://github.com/thommakoon/imu_gait_analysis.git

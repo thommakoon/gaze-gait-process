@@ -162,6 +162,7 @@
       <div class="toolbar">
         <button type="button" id="back-btn">← All sessions</button>
         <a class="button primary" id="wave-btn" href="#" hidden>Wave viewer</a>
+        <a class="button primary" id="saccade-btn" href="#" hidden>Saccade analysis</a>
       </div>
       <div class="panel" id="detail-summary"></div>
       <div id="detail-sections"></div>
@@ -328,6 +329,9 @@
       const waveBtn = $("wave-btn");
       waveBtn.href = `/session/${encodeURIComponent(d.session_id)}/waves`;
       waveBtn.hidden = false;
+      const saccadeBtn = $("saccade-btn");
+      saccadeBtn.href = `/session/${encodeURIComponent(d.session_id)}/saccades`;
+      saccadeBtn.hidden = false;
       const gm = d.grid_meta || {};
       const gait = d.gait || {};
       const agg = gait.gait_aggregate || {};

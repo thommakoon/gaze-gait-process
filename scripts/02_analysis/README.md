@@ -99,3 +99,58 @@ If auto-detected initial contact or stance thresholds look wrong, edit:
 Then re-run `--stage pipeline` only.
 
 For interactive threshold picking, use the upstream scripts in `external/imu_gait_analysis/src/main_LFRF_preprocessing.py` (`get_stance_threshold` / `get_initial_contact`).
+
+## Saccade IVT + stride phase
+
+Detect saccades with a velocity threshold (IVT) on gaze speed, assign each onset to an LF stride window (IC → next IC), and bin by stride phase (%).
+
+**Core module:** `ivt_saccade.py`
+
+- Gaze speed from `gaze_200hz.csv`: ‖d/dt (x, y)‖ @ 200 Hz
+- LF strides from `left_foot_core_params.csv` (outlier strides excluded by default)
+- Default IVT threshold: **500 px/s**, min duration **20 ms**
+- Each saccade gets `stride_index` + `stride_pct` (0 = IC, 100 = next IC)
+
+**Batch CLI** (writes per session under `data/05_gait_xsens/<session>/`):
+
+```bash
+uv run python run_saccade_stride_ivt.py --session 20260606_135203
+uv run python run_saccade_stride_ivt.py --session 20260606_135203 --threshold 600 --min-duration-ms 20
+```
+
+| Output | Description |
+|--------|-------------|
+| `saccade_stride_ivt.csv` | One row per saccade (onset time, stride phase, …) |
+| `saccade_stride_ivt.json` | Same data + metadata |
+
+**Histogram plot** (interactive matplotlib, no save):
+
+```bash
+uv run python plot_saccade_stride_pct.py --session 20260606_135203
+```
+
+## Saccade stride-phase Fourier fit
+
+Fit a single harmonic to the **normalized** stride-phase histogram:
+
+`f(t) = a0 + a1·cos(ωt) + b1·sin(ωt)` with `t ∈ [0, 1]` (stride phase / 100), `ω = 2π·f_cyc`.
+
+Sweep **f_cyc = 0.2 … 10** cycles/stride (step 0.2); nonlinear least-squares on `(a0, a1, b1)` at each frequency (max 400 evals). Pick the row with highest **R²**.
+
+**Core module:** `saccade_stride_fourier.py`  
+**Batch CLI:**
+
+```bash
+uv run python run_saccade_stride_fourier.py --session 20260606_135203
+uv run python run_saccade_stride_fourier.py --session 20260606_135203 --bin-width 5
+```
+
+Reads existing `saccade_stride_ivt.csv` or runs IVT first if missing.
+
+| Output | Description |
+|--------|-------------|
+| `saccade_stride_fourier_sweep.csv` | All frequencies: `f_cyc_per_stride`, `omega`, `a0`, `a1`, `b1`, `r2` |
+| `saccade_stride_fourier_best.csv` | Single best-fit row |
+| `saccade_stride_fourier.json` | Full bundle |
+
+Use **5%** histogram bins for the fit (equal weight per bin). Plot `f_cyc_per_stride` vs `r2` from the sweep CSV for frequency selection.

@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from _paths import GAIT_RESULT, GAIT_XSENS
 from catalog import build_session_detail, list_sessions
 from gait_catalog import safe_gait_path
+from saccade_catalog import analyze_session_saccade_fourier, analyze_session_saccades
 from wave_catalog import load_lf_position_z_series, load_session_waves
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -34,13 +35,22 @@ def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
 
 
-@app.get("/session/{session_id}/waves")
-def waves_view(session_id: str) -> FileResponse:
+def _session_viewer_page(session_id: str) -> FileResponse:
     if not SESSION_ID_RE.match(session_id):
         raise HTTPException(status_code=400, detail="Invalid session id")
     if not (GAIT_XSENS / session_id).is_dir():
         raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
     return FileResponse(STATIC_DIR / "waves.html")
+
+
+@app.get("/session/{session_id}/waves")
+def waves_view(session_id: str) -> FileResponse:
+    return _session_viewer_page(session_id)
+
+
+@app.get("/session/{session_id}/saccades")
+def saccades_view(session_id: str) -> FileResponse:
+    return _session_viewer_page(session_id)
 
 
 @app.get("/api/sessions")
@@ -90,6 +100,80 @@ def api_lf_position_z_wave(session_id: str) -> dict:
             detail="LF position_z not available — run gait analysis for this session",
         )
     return series
+
+
+@app.get("/api/sessions/{session_id}/saccades/analyze")
+def api_saccades_analyze(
+    session_id: str,
+    threshold: float | None = None,
+    min_duration_ms: float = 20.0,
+    bin_width: float = 10.0,
+) -> dict:
+    if not SESSION_ID_RE.match(session_id):
+        raise HTTPException(status_code=400, detail="Invalid session id")
+    if not (GAIT_XSENS / session_id).is_dir():
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    if threshold is not None and threshold < 0:
+        raise HTTPException(status_code=400, detail="threshold must be >= 0")
+    if min_duration_ms < 0:
+        raise HTTPException(status_code=400, detail="min_duration_ms must be >= 0")
+    if bin_width <= 0 or bin_width > 100:
+        raise HTTPException(status_code=400, detail="bin_width must be in (0, 100]")
+    try:
+        return analyze_session_saccades(
+            session_id,
+            threshold_px_s=threshold,
+            min_duration_ms=min_duration_ms,
+            bin_width=bin_width,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/sessions/{session_id}/saccades/fourier")
+def api_saccades_fourier(
+    session_id: str,
+    threshold: float | None = None,
+    min_duration_ms: float = 20.0,
+    bin_width: float = 5.0,
+    f_min: float = 0.2,
+    f_max: float = 10.0,
+    f_step: float = 0.2,
+) -> dict:
+    if not SESSION_ID_RE.match(session_id):
+        raise HTTPException(status_code=400, detail="Invalid session id")
+    if not (GAIT_XSENS / session_id).is_dir():
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    if threshold is not None and threshold < 0:
+        raise HTTPException(status_code=400, detail="threshold must be >= 0")
+    if min_duration_ms < 0:
+        raise HTTPException(status_code=400, detail="min_duration_ms must be >= 0")
+    if bin_width <= 0 or bin_width > 100:
+        raise HTTPException(status_code=400, detail="bin_width must be in (0, 100]")
+    if f_min < 0 or f_max <= f_min:
+        raise HTTPException(status_code=400, detail="f_min/f_max invalid")
+    if f_step <= 0:
+        raise HTTPException(status_code=400, detail="f_step must be > 0")
+    try:
+        return analyze_session_saccade_fourier(
+            session_id,
+            threshold_px_s=threshold,
+            min_duration_ms=min_duration_ms,
+            bin_width_pct=bin_width,
+            f_min=f_min,
+            f_max=f_max,
+            f_step=f_step,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/api/gait/files/{rel_path:path}")

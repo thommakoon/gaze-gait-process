@@ -181,7 +181,7 @@ def _gradient_uniform(values: list[float], fs_hz: int) -> list[float]:
     return grad
 
 
-def _derivative_deg_s(
+def _derivative_per_s(
     values: list[float | None],
     *,
     fs_hz: int = FS_HZ,
@@ -197,6 +197,21 @@ def _derivative_deg_s(
         filled = _unwrap_deg(filled)
     grad = _gradient_uniform(filled, fs_hz)
     return [None if values[i] is None else grad[i] for i in range(len(values))]
+
+
+def _gaze_px_speed_px_s(
+    values_x: list[float | None],
+    values_y: list[float | None],
+) -> list[float | None]:
+    vx = _derivative_per_s(values_x, unwrap=False)
+    vy = _derivative_per_s(values_y, unwrap=False)
+    out: list[float | None] = []
+    for i in range(len(vx)):
+        if vx[i] is None or vy[i] is None:
+            out.append(None)
+        else:
+            out.append(math.hypot(vx[i], vy[i]))
+    return out
 
 
 def _mean_finite(values: list[float | None]) -> float | None:
@@ -267,7 +282,7 @@ def _load_head_signals(session_id: str, *, t_start_ns: int) -> list[dict]:
         if col not in rows[0]:
             continue
         values = [_float_or_none(row.get(col, "")) for row in rows]
-        rates = _derivative_deg_s(values, unwrap=True)
+        rates = _derivative_per_s(values, unwrap=True)
         out.append(
             _series(
                 signal_id=signal_id,
@@ -320,11 +335,29 @@ def _load_gaze_signals(session_id: str, *, t_start_ns: int) -> list[dict]:
             | {"signal_mean": mean}
         )
 
+    col_x = "gaze x [px]"
+    col_y = "gaze y [px]"
+    if col_x in rows[0] and col_y in rows[0]:
+        raw_x = [_float_or_none(row.get(col_x, "")) for row in rows]
+        raw_y = [_float_or_none(row.get(col_y, "")) for row in rows]
+        speed = _gaze_px_speed_px_s(raw_x, raw_y)
+        out.append(
+            _series(
+                signal_id="gaze_speed",
+                label="gaze speed",
+                unit="px/s",
+                description=f"||d/dt ({col_x}, {col_y})|| @ {FS_HZ} Hz",
+                times_s=times_s,
+                values=speed,
+                source=source,
+            )
+        )
+
     for signal_id, label, col in _GAZE_RATE_COLS:
         if col not in rows[0]:
             continue
         values = [_float_or_none(row.get(col, "")) for row in rows]
-        rates = _derivative_deg_s(values, unwrap=True)
+        rates = _derivative_per_s(values, unwrap=True)
         out.append(
             _series(
                 signal_id=signal_id,

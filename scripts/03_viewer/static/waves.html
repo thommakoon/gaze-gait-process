@@ -77,9 +77,11 @@
       background: #2a2a2a;
     }
     .name-row {
-      height: var(--lane-h);
-      line-height: var(--lane-h);
+      min-height: 20px;
+      line-height: 1.2;
       padding: 0 0.5rem;
+      display: flex;
+      align-items: center;
       font-size: 0.75rem;
       border-bottom: 1px solid #2f2f2f;
       white-space: nowrap;
@@ -225,6 +227,47 @@
       text-align: left;
     }
     .y-scale-fit:hover { text-decoration: underline; }
+    .lane-toggles {
+      max-height: 240px;
+      overflow-y: auto;
+      margin-top: 0.35rem;
+    }
+    .lane-toggle-row {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      margin-bottom: 0.2rem;
+      font-size: 0.72rem;
+      color: var(--text);
+      cursor: pointer;
+      user-select: none;
+    }
+    .lane-toggle-row.off { opacity: 0.45; }
+    .lane-toggle-row input { accent-color: var(--accent); flex-shrink: 0; }
+    .lane-color-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 1px;
+      flex-shrink: 0;
+    }
+    .lane-toggle-label {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .mini-btns {
+      display: flex;
+      gap: 0.25rem;
+      margin-bottom: 0.35rem;
+    }
+    .mini-btns button {
+      flex: 1;
+      margin-bottom: 0;
+      font-size: 0.72rem;
+      padding: 0.25rem;
+    }
+    .name-row.off { opacity: 0.35; color: var(--muted); }
     .bottom {
       background: var(--panel);
       border-top: 1px solid var(--border);
@@ -266,13 +309,89 @@
       font-size: 0.72rem;
       color: var(--muted);
     }
+    .saccade-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .saccade-modal[hidden] { display: none; }
+    .saccade-modal-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.55);
+    }
+    .saccade-modal-panel {
+      position: relative;
+      background: #f5f5f5;
+      border: 1px solid #888;
+      border-radius: 4px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+      max-width: min(92vw, 780px);
+      width: 100%;
+      color: #222;
+      font-family: "Segoe UI", Arial, sans-serif;
+    }
+    .saccade-modal-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.45rem 0.65rem;
+      background: #e8e8e8;
+      border-bottom: 1px solid #bbb;
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+    .saccade-modal-head button {
+      border: 1px solid #999;
+      background: #fff;
+      border-radius: 3px;
+      padding: 0.15rem 0.45rem;
+      cursor: pointer;
+      font: inherit;
+    }
+    .saccade-modal-body {
+      padding: 0.65rem 0.75rem 0.75rem;
+      background: #fff;
+    }
+    .saccade-modal-caption {
+      margin-top: 0.45rem;
+      font-size: 0.75rem;
+      color: #555;
+      text-align: center;
+    }
+    #saccade-hist-canvas,
+    #saccade-fourier-canvas,
+    #saccade-fourier-hist-canvas {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+    .saccade-modal-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    .saccade-modal-subtitle {
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: #444;
+      margin: 0 0 0.25rem;
+    }
+    #btn-generate-saccade-onset,
+    #btn-fourier-fit {
+      margin-top: 0.5rem;
+      width: 100%;
+    }
   </style>
 </head>
 <body>
   <div class="app">
     <header>
       <a class="btn" id="back-link" href="/">← Session</a>
-      <h1>Wave viewer</h1>
+      <h1 id="page-title">Wave viewer</h1>
       <span class="meta" id="header-meta">Loading…</span>
     </header>
 
@@ -308,9 +427,36 @@
           </div>
         </section>
         <section>
+          <h2>Lanes</h2>
+          <div class="mini-btns">
+            <button type="button" id="btn-lanes-all">Show all</button>
+            <button type="button" id="btn-lanes-none">Hide all</button>
+          </div>
+          <div class="lane-toggles" id="lane-toggles"></div>
+        </section>
+        <section>
+          <h2>Row height</h2>
+          <button type="button" id="btn-row-height-reset">Reset all (28 px)</button>
+          <div id="row-height-rows"></div>
+        </section>
+        <section>
           <h2>Y scale</h2>
           <button type="button" id="btn-y-auto-all">Auto all</button>
           <div id="y-scale-rows"></div>
+        </section>
+        <section id="saccade-threshold-section" hidden>
+          <h2>Gaze speed threshold</h2>
+          <input type="number" id="gaze-speed-threshold-input" step="any" min="0"
+            placeholder="px/s" title="Saccade speed threshold (px/s)"
+            style="width:100%;padding:0.3rem 0.4rem;font:inherit;font-size:0.78rem;background:#1a1a1a;color:var(--text);border:1px solid var(--border);border-radius:3px;">
+          <div class="readout" style="margin-top:0.35rem">Drag the orange line on the gaze speed lane, or type a value.</div>
+          <label for="ivt-min-duration-input" style="display:block;margin-top:0.6rem;font-size:0.72rem;color:var(--muted)">IVT min duration (ms)</label>
+          <input type="number" id="ivt-min-duration-input" step="1" min="0"
+            value="20" title="Minimum interval duration for IVT (ms)"
+            style="width:100%;padding:0.3rem 0.4rem;font:inherit;font-size:0.78rem;background:#1a1a1a;color:var(--text);border:1px solid var(--border);border-radius:3px;margin-top:0.25rem;">
+          <div class="readout" id="ivt-stats-readout" style="margin-top:0.35rem">—</div>
+          <button type="button" id="btn-generate-saccade-onset">Generate saccade onset</button>
+          <button type="button" id="btn-fourier-fit">Fourier fit (freq sweep)</button>
         </section>
         <section>
           <h2>Signals</h2>
@@ -339,9 +485,53 @@
     </div>
   </div>
 
+  <div id="saccade-hist-modal" class="saccade-modal" hidden>
+    <div class="saccade-modal-backdrop" id="saccade-hist-backdrop"></div>
+    <div class="saccade-modal-panel" role="dialog" aria-labelledby="saccade-hist-title">
+      <div class="saccade-modal-head">
+        <span id="saccade-hist-title">Saccade stride-phase histogram</span>
+        <button type="button" id="saccade-hist-close" title="Close">✕</button>
+      </div>
+      <div class="saccade-modal-body">
+        <canvas id="saccade-hist-canvas" width="720" height="420"></canvas>
+        <div class="saccade-modal-caption" id="saccade-hist-caption"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="saccade-fourier-modal" class="saccade-modal" hidden>
+    <div class="saccade-modal-backdrop" id="saccade-fourier-backdrop"></div>
+    <div class="saccade-modal-panel" role="dialog" aria-labelledby="saccade-fourier-title">
+      <div class="saccade-modal-head">
+        <span id="saccade-fourier-title">Saccade stride-phase Fourier fit</span>
+        <button type="button" id="saccade-fourier-close" title="Close">✕</button>
+      </div>
+      <div class="saccade-modal-body saccade-modal-stack">
+        <div>
+          <div class="saccade-modal-subtitle">Stride-phase histogram + best harmonic fit</div>
+          <canvas id="saccade-fourier-hist-canvas" width="720" height="280"></canvas>
+        </div>
+        <div>
+          <div class="saccade-modal-subtitle">R² vs frequency sweep</div>
+          <canvas id="saccade-fourier-canvas" width="720" height="280"></canvas>
+        </div>
+        <div class="saccade-modal-caption" id="saccade-fourier-caption"></div>
+      </div>
+    </div>
+  </div>
+
   <script>
-    const LANE_H = 28;
+    const DEFAULT_LANE_H = 28;
+    const EMPTY_LANE_H = 28;
+    const MIN_LANE_H = 20;
+    const MAX_LANE_H = 400;
     const EMPTY_LANES = 2;
+    const THRESHOLD_HIT_PX = 8;
+    const GAZE_SPEED_THRESHOLD_COLOR = "#f0a020";
+    const IVT_HIGHLIGHT_FILL = "rgba(240, 160, 32, 0.22)";
+    const IVT_HIGHLIGHT_ABOVE = "rgba(240, 160, 32, 0.38)";
+    const DEFAULT_IVT_THRESHOLD_PX_S = 500;
+    const DEFAULT_IVT_MIN_DURATION_MS = 20;
     const SIGNAL_COLORS = {
       lf_position_z: "#4ec9b0",
       rf_position_z: "#6a9fb5",
@@ -353,6 +543,7 @@
       head_yaw_rate: "#7eb8d8",
       gaze_x: "#ce9178",
       gaze_y: "#d7ba7d",
+      gaze_speed: "#e8a088",
       gaze_azimuth: "#f48771",
       gaze_elevation: "#cca700",
       gaze_azimuth_rate: "#d96a55",
@@ -370,6 +561,52 @@
       return parts[0] === "session" ? parts[1] : null;
     })();
 
+    const viewerMode = (() => {
+      const parts = window.location.pathname.split("/").filter(Boolean);
+      return parts[2] === "saccades" ? "saccades" : "waves";
+    })();
+
+    const VIEWER_MODES = {
+      waves: {
+        title: "Wave viewer",
+        pageTitle: "Wave viewer — gazeGait",
+        signalIds: null,
+        defaultLaneHeights: null,
+        rowHeightResetLabel: "Reset all (28 px)",
+      },
+      saccades: {
+        title: "Saccade analysis",
+        pageTitle: "Saccade analysis — gazeGait",
+        signalIds: ["lf_position_z", "rf_position_z", "head_pitch", "gaze_speed"],
+        defaultLaneHeights: {
+          lf_position_z: 28,
+          rf_position_z: 28,
+          head_pitch: 28,
+          gaze_speed: 300,
+        },
+        rowHeightResetLabel: "Reset defaults",
+      },
+    };
+
+    function viewerConfig() {
+      return VIEWER_MODES[viewerMode];
+    }
+
+    function applyViewerSignals(signals) {
+      const ids = viewerConfig().signalIds;
+      if (!ids) return signals;
+      const byId = new Map(signals.map((s) => [s.id, s]));
+      return ids.map((id) => byId.get(id)).filter(Boolean);
+    }
+
+    function initViewerMode() {
+      const cfg = viewerConfig();
+      document.title = cfg.pageTitle;
+      $("page-title").textContent = cfg.title;
+      $("btn-row-height-reset").textContent = cfg.rowHeightResetLabel;
+      $("saccade-threshold-section").hidden = viewerMode !== "saccades";
+    }
+
     const state = {
       tStartNs: 0,
       tEndNs: 0,
@@ -385,9 +622,18 @@
       signalLoadError: null,
       waveMissing: [],
       yScale: {},
+      laneHeight: {},
+      signalVisible: {},
+      gazeSpeedThreshold: null,
+      gazeSpeedThresholdDragging: false,
+      gazeSpeedThresholdDidDrag: false,
+      ivtMinDurationMs: DEFAULT_IVT_MIN_DURATION_MS,
+      ivtIntervals: [],
+      saccadeOnsets: [],
     };
 
     const $ = (id) => document.getElementById(id);
+    initViewerMode();
     const waveCanvas = $("wave-canvas");
     const rulerCanvas = $("ruler-canvas");
     const waveCtx = waveCanvas.getContext("2d");
@@ -421,7 +667,7 @@
       const wrap = $("canvas-wrap");
       const dpr = window.devicePixelRatio || 1;
       const w = wrap.clientWidth;
-      const h = Math.max(wrap.clientHeight, laneCount() * LANE_H);
+      const h = Math.max(wrap.clientHeight, totalWaveHeight());
       waveCanvas.width = Math.max(1, Math.floor(w * dpr));
       waveCanvas.height = Math.max(1, Math.floor(h * dpr));
       waveCanvas.style.width = `${w}px`;
@@ -497,8 +743,128 @@
       drawGaitMarkers(rulerCtx, w, h);
     }
 
+    function clampLaneHeight(h) {
+      const n = Number(h);
+      if (!Number.isFinite(n)) return DEFAULT_LANE_H;
+      return Math.max(MIN_LANE_H, Math.min(MAX_LANE_H, Math.round(n)));
+    }
+
+    function defaultLaneHeightForSignal(signalId) {
+      const h = viewerConfig().defaultLaneHeights?.[signalId];
+      return h != null ? clampLaneHeight(h) : DEFAULT_LANE_H;
+    }
+
+    function ensureLaneHeight(signalId) {
+      if (state.laneHeight[signalId] == null) {
+        state.laneHeight[signalId] = defaultLaneHeightForSignal(signalId);
+      }
+      return clampLaneHeight(state.laneHeight[signalId]);
+    }
+
+    function initLaneHeights() {
+      for (const signal of state.signals) {
+        state.laneHeight[signal.id] = defaultLaneHeightForSignal(signal.id);
+      }
+    }
+
+    function laneHeightForSignal(signal) {
+      return ensureLaneHeight(signal.id);
+    }
+
+    function laneLayout() {
+      const visible = visibleSignals();
+      const heights = visible.map(laneHeightForSignal);
+      for (let i = 0; i < EMPTY_LANES; i++) heights.push(EMPTY_LANE_H);
+
+      const offsets = [];
+      let total = 0;
+      for (const laneH of heights) {
+        offsets.push(total);
+        total += laneH;
+      }
+      return { heights, offsets, total };
+    }
+
+    function totalWaveHeight() {
+      return laneLayout().total;
+    }
+
     function laneCount() {
-      return Math.max(state.signals.length + EMPTY_LANES, EMPTY_LANES);
+      return laneLayout().heights.length;
+    }
+
+    function isSignalVisible(signalId) {
+      return state.signalVisible[signalId] !== false;
+    }
+
+    function visibleSignals() {
+      return state.signals.filter((s) => isSignalVisible(s.id));
+    }
+
+    function initSignalVisibility() {
+      for (const signal of state.signals) {
+        if (state.signalVisible[signal.id] === undefined) {
+          state.signalVisible[signal.id] = true;
+        }
+      }
+    }
+
+    function setSignalVisible(signalId, visible) {
+      state.signalVisible[signalId] = visible;
+      syncLaneToggleUi();
+      buildNameRows();
+      buildYScalePanel();
+      resizeCanvases();
+    }
+
+    function setAllSignalsVisible(visible) {
+      for (const signal of state.signals) {
+        state.signalVisible[signal.id] = visible;
+      }
+      syncLaneToggleUi();
+      buildNameRows();
+      buildYScalePanel();
+      resizeCanvases();
+    }
+
+    function syncLaneToggleUi() {
+      for (const row of $("lane-toggles").querySelectorAll(".lane-toggle-row")) {
+        const id = row.dataset.signalId;
+        const on = isSignalVisible(id);
+        const cb = row.querySelector("input");
+        if (cb) cb.checked = on;
+        row.classList.toggle("off", !on);
+      }
+    }
+
+    function buildLaneToggles() {
+      const container = $("lane-toggles");
+      container.replaceChildren();
+      for (const signal of state.signals) {
+        const row = document.createElement("label");
+        row.className = "lane-toggle-row" + (isSignalVisible(signal.id) ? "" : " off");
+        row.dataset.signalId = signal.id;
+
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = isSignalVisible(signal.id);
+
+        const dot = document.createElement("span");
+        dot.className = "lane-color-dot";
+        dot.style.background = SIGNAL_COLORS[signal.id] || "#dcdcaa";
+
+        const text = document.createElement("span");
+        text.className = "lane-toggle-label";
+        text.textContent = signal.label;
+        text.title = signal.label;
+
+        cb.addEventListener("change", () => {
+          setSignalVisible(signal.id, cb.checked);
+        });
+
+        row.append(cb, dot, text);
+        container.appendChild(row);
+      }
     }
 
     function valueRangeInWindow(times, values, t0, t1) {
@@ -550,13 +916,17 @@
       if (ys.auto) {
         return valueRangeInWindow(signal.times_s, signal.values, t0, t1);
       }
-      let vmin = Number(ys.ymin);
-      let vmax = Number(ys.ymax);
-      if (!Number.isFinite(vmin) || !Number.isFinite(vmax)) {
+      let vmin = parseScaleInput(String(ys.ymin), signal.unit);
+      let vmax = parseScaleInput(String(ys.ymax), signal.unit);
+      if (vmin == null || vmax == null) {
         return valueRangeInWindow(signal.times_s, signal.values, t0, t1);
       }
       if (vmin > vmax) [vmin, vmax] = [vmax, vmin];
-      return padValueRange(vmin, vmax);
+      if (vmin === vmax) {
+        const pad = Math.max(Math.abs(vmin) * 0.1, 0.01);
+        return { vmin: vmin - pad, vmax: vmax + pad };
+      }
+      return { vmin, vmax };
     }
 
     function fmtScaleValue(value, unit) {
@@ -564,6 +934,7 @@
       if (unit === "m") return (value * 100).toFixed(1);
       if (unit === "deg") return value.toFixed(1);
       if (unit === "deg/s") return value.toFixed(2);
+      if (unit === "px/s") return value.toFixed(1);
       if (unit === "px") return value.toFixed(0);
       return String(value);
     }
@@ -580,11 +951,699 @@
       return fmtScaleValue(value, unit);
     }
 
-    function valueToLaneY(laneIdx, value, vmin, vmax) {
-      const top = laneIdx * LANE_H + 3;
-      const bottom = (laneIdx + 1) * LANE_H - 3;
-      const frac = (value - vmin) / (vmax - vmin);
-      return bottom - frac * (bottom - top);
+    function valueToLaneY(laneTop, laneBottom, value, vmin, vmax) {
+      const innerTop = laneTop + 3;
+      const innerBottom = laneBottom - 3;
+      const span = vmax - vmin;
+      const frac = span > 0 ? (value - vmin) / span : 0.5;
+      const y = innerBottom - frac * (innerBottom - innerTop);
+      return Math.max(laneTop + 1, Math.min(laneBottom - 1, y));
+    }
+
+    function laneYToValue(laneTop, laneBottom, y, vmin, vmax) {
+      const innerTop = laneTop + 3;
+      const innerBottom = laneBottom - 3;
+      const span = vmax - vmin;
+      if (span <= 0) return vmin;
+      const frac = (innerBottom - y) / (innerBottom - innerTop);
+      return vmin + frac * span;
+    }
+
+    function canvasCoords(e) {
+      const rect = waveCanvas.getBoundingClientRect();
+      return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    }
+
+    function gazeSpeedSignal() {
+      return state.signals.find((s) => s.id === "gaze_speed") || null;
+    }
+
+    function gazeSpeedLaneContext() {
+      if (viewerMode !== "saccades" || !isSignalVisible("gaze_speed")) return null;
+      const layout = laneLayout();
+      const visible = visibleSignals();
+      const laneIdx = visible.findIndex((s) => s.id === "gaze_speed");
+      if (laneIdx < 0) return null;
+      const signal = visible[laneIdx];
+      const laneTop = layout.offsets[laneIdx];
+      const laneBottom = laneTop + layout.heights[laneIdx];
+      return { signal, laneIdx, laneTop, laneBottom };
+    }
+
+    function defaultGazeSpeedThreshold(_signal) {
+      return DEFAULT_IVT_THRESHOLD_PX_S;
+    }
+
+    function initGazeSpeedThreshold() {
+      if (viewerMode !== "saccades") return;
+      const signal = gazeSpeedSignal();
+      if (!signal) return;
+      state.gazeSpeedThreshold = defaultGazeSpeedThreshold(signal);
+      syncGazeSpeedThresholdInput();
+      recomputeIvtIntervals();
+    }
+
+    function syncGazeSpeedThresholdInput() {
+      const input = $("gaze-speed-threshold-input");
+      if (!input || document.activeElement === input) return;
+      input.value = state.gazeSpeedThreshold == null
+        ? ""
+        : state.gazeSpeedThreshold.toFixed(1);
+    }
+
+    function setGazeSpeedThreshold(value) {
+      if (!Number.isFinite(value)) return;
+      state.gazeSpeedThreshold = Math.max(0, value);
+      syncGazeSpeedThresholdInput();
+      recomputeIvtIntervals();
+      drawAll();
+    }
+
+    function computeIvtSaccadeIntervals(signal, threshold, minDurationS) {
+      const times = signal.times_s;
+      const values = signal.values;
+      if (!times?.length || threshold == null) return [];
+
+      const intervals = [];
+      let startIdx = null;
+
+      for (let i = 0; i < values.length; i++) {
+        const v = values[i];
+        const above = v != null && Number.isFinite(v) && v > threshold;
+        if (above && startIdx == null) {
+          startIdx = i;
+        } else if (!above && startIdx != null) {
+          const endIdx = Math.max(startIdx, i - 1);
+          const startS = times[startIdx];
+          const endS = times[endIdx];
+          if (endS - startS >= minDurationS) {
+            let peak = -Infinity;
+            for (let j = startIdx; j <= endIdx; j++) {
+              const v = values[j];
+              if (v != null && Number.isFinite(v)) peak = Math.max(peak, v);
+            }
+            intervals.push({
+              start_s: startS,
+              end_s: endS,
+              peak_speed_px_s: Number.isFinite(peak) ? peak : null,
+            });
+          }
+          startIdx = null;
+        }
+      }
+
+      if (startIdx != null) {
+        const startS = times[startIdx];
+        const endS = times[times.length - 1];
+        if (endS - startS >= minDurationS) {
+          let peak = -Infinity;
+          for (let j = startIdx; j < values.length; j++) {
+            const v = values[j];
+            if (v != null && Number.isFinite(v)) peak = Math.max(peak, v);
+          }
+          intervals.push({
+            start_s: startS,
+            end_s: endS,
+            peak_speed_px_s: Number.isFinite(peak) ? peak : null,
+          });
+        }
+      }
+
+      return intervals;
+    }
+
+    function recomputeIvtIntervals() {
+      const signal = gazeSpeedSignal();
+      if (!signal || state.gazeSpeedThreshold == null) {
+        state.ivtIntervals = [];
+        updateIvtReadout();
+        return;
+      }
+      const minDurationS = Math.max(0, state.ivtMinDurationMs) / 1000;
+      state.ivtIntervals = computeIvtSaccadeIntervals(
+        signal,
+        state.gazeSpeedThreshold,
+        minDurationS,
+      );
+      updateIvtReadout();
+    }
+
+    function updateIvtReadout() {
+      const el = $("ivt-stats-readout");
+      if (!el) return;
+      if (viewerMode !== "saccades") return;
+
+      const n = state.ivtIntervals.length;
+      if (!n) {
+        el.textContent = state.gazeSpeedThreshold == null
+          ? "—"
+          : "0 IVT intervals above threshold";
+        return;
+      }
+
+      let totalS = 0;
+      for (const iv of state.ivtIntervals) {
+        totalS += iv.end_s - iv.start_s;
+      }
+      el.innerHTML = `
+        <div><strong>${n}</strong> IVT interval${n === 1 ? "" : "s"} above ${state.gazeSpeedThreshold.toFixed(1)} px/s</div>
+        <div>Total ${(totalS * 1000).toFixed(0)} ms · mean ${((totalS / n) * 1000).toFixed(1)} ms</div>
+      `;
+    }
+
+    function evalHarmonicFit(t01, best) {
+      const omega = best.omega_rad_per_stride;
+      return (
+        best.a0
+        + best.a1 * Math.cos(omega * t01)
+        + best.b1 * Math.sin(omega * t01)
+      );
+    }
+
+    function drawStridePctHistogram(histogram, meta, options = {}) {
+      const canvas = $(options.canvasId || "saccade-hist-canvas");
+      const bins = histogram.bins || [];
+      const binWidth = histogram.bin_width || meta.binWidth || 10;
+      const counts = bins.map((b) => b.count);
+      const nBins = bins.length || Math.max(1, Math.round(100 / binWidth));
+      const fourierBest = options.fourierBest || null;
+      const assigned = meta.assigned || histogram.assigned_count || 0;
+      const dpr = window.devicePixelRatio || 1;
+      const cssW = options.width || 720;
+      const cssH = options.height || 420;
+      canvas.width = Math.floor(cssW * dpr);
+      canvas.height = Math.floor(cssH * dpr);
+      canvas.style.width = `${cssW}px`;
+      canvas.style.height = `${cssH}px`;
+      const ctx = canvas.getContext("2d");
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      const margin = { l: 56, r: 24, t: 52, b: 58 };
+      const plotW = cssW - margin.l - margin.r;
+      const plotH = cssH - margin.t - margin.b;
+
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, cssW, cssH);
+
+      const maxCount = Math.max(1, ...counts, 0);
+
+      ctx.strokeStyle = "#cccccc";
+      ctx.lineWidth = 1;
+      const yTicks = 5;
+      ctx.font = "11px Consolas, monospace";
+      ctx.fillStyle = "#333";
+      ctx.textAlign = "right";
+      ctx.textBaseline = "middle";
+      for (let t = 0; t <= yTicks; t++) {
+        const frac = t / yTicks;
+        const y = margin.t + plotH - frac * plotH;
+        const val = Math.round(frac * maxCount);
+        ctx.strokeStyle = "#e0e0e0";
+        ctx.beginPath();
+        ctx.moveTo(margin.l, y + 0.5);
+        ctx.lineTo(margin.l + plotW, y + 0.5);
+        ctx.stroke();
+        ctx.fillStyle = "#333";
+        ctx.fillText(String(val), margin.l - 6, y);
+      }
+
+      const barW = plotW / nBins;
+      ctx.fillStyle = "#4a90c4";
+      ctx.strokeStyle = "#1a1a1a";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "bottom";
+      for (let i = 0; i < nBins; i++) {
+        const h = (counts[i] / maxCount) * plotH;
+        const x = margin.l + i * barW + barW * 0.06;
+        const w = barW * 0.88;
+        const y = margin.t + plotH - h;
+        ctx.fillRect(x, y, w, h);
+        ctx.strokeRect(x, y, w, h);
+        if (counts[i] > 0) {
+          ctx.fillStyle = "#222";
+          ctx.fillText(String(counts[i]), x + w / 2, y - 2);
+          ctx.fillStyle = "#4a90c4";
+        }
+      }
+
+      if (fourierBest && assigned > 0) {
+        ctx.save();
+        ctx.strokeStyle = "#c44";
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        const samples = Math.max(nBins * 8, 80);
+        for (let s = 0; s <= samples; s++) {
+          const phasePct = (s / samples) * 100;
+          const t01 = phasePct / 100;
+          const fitNorm = evalHarmonicFit(t01, fourierBest);
+          const fitCount = fitNorm * assigned;
+          const barX = margin.l + (phasePct / 100) * plotW;
+          const barY = margin.t + plotH - (fitCount / maxCount) * plotH;
+          if (s === 0) ctx.moveTo(barX, barY);
+          else ctx.lineTo(barX, barY);
+        }
+        ctx.stroke();
+        ctx.fillStyle = "#c44";
+        ctx.font = "10px Segoe UI, sans-serif";
+        ctx.textAlign = "left";
+        ctx.fillText(
+          `fit f=${Number(fourierBest.f_cyc_per_stride).toFixed(2)} cyc/stride · R²=${Number(fourierBest.r2).toFixed(3)}`,
+          margin.l + 4,
+          margin.t + 12,
+        );
+        ctx.restore();
+      }
+
+      ctx.strokeStyle = "#333";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(margin.l, margin.t);
+      ctx.lineTo(margin.l, margin.t + plotH);
+      ctx.lineTo(margin.l + plotW, margin.t + plotH);
+      ctx.stroke();
+
+      ctx.fillStyle = "#111";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      ctx.font = "12px Segoe UI, sans-serif";
+      ctx.fillText(
+        `Saccade stride-phase histogram — ${meta.sessionId}`,
+        cssW / 2,
+        10,
+      );
+      ctx.font = "10px Segoe UI, sans-serif";
+      ctx.fillStyle = "#555";
+      const fitNote = fourierBest ? " · red = a0 + a1·cos(ωt) + b1·sin(ωt)" : "";
+      ctx.fillText(
+        `assigned ${meta.assigned}/${meta.total} · IVT ≥ ${meta.threshold.toFixed(0)} px/s · min ${meta.minDurationMs} ms · ${nBins} bins × ${binWidth}%${fitNote}`,
+        cssW / 2,
+        28,
+      );
+
+      ctx.font = "11px Segoe UI, sans-serif";
+      ctx.fillStyle = "#222";
+      ctx.fillText("LF stride phase (%) — 0 = IC, 100 = next IC", cssW / 2, cssH - 22);
+
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      ctx.font = "10px Consolas, monospace";
+      for (let i = 0; i < nBins; i++) {
+        const lo = bins[i]?.lo ?? i * binWidth;
+        const hi = bins[i]?.hi ?? Math.min(100, lo + binWidth);
+        const x = margin.l + (i + 0.5) * barW;
+        if (nBins <= 20) {
+          ctx.fillText(`${lo}–${hi}`, x, margin.t + plotH + 4);
+        } else if (i % 2 === 0) {
+          ctx.fillText(String(lo), x, margin.t + plotH + 4);
+        }
+      }
+
+      ctx.save();
+      ctx.translate(14, margin.t + plotH / 2);
+      ctx.rotate(-Math.PI / 2);
+      ctx.textAlign = "center";
+      ctx.font = "11px Segoe UI, sans-serif";
+      ctx.fillStyle = "#222";
+      ctx.fillText("Saccade count", 0, 0);
+      ctx.restore();
+    }
+
+    function showSaccadeHistogramFromApi(data) {
+      const meta = data.metadata || {};
+      const histogram = data.histogram || {};
+      const assigned = histogram.assigned_count ?? 0;
+      const total = meta.saccade_count ?? (data.saccades?.length ?? 0);
+      if (!assigned) {
+        alert("No saccades fall inside an LF stride window. Check threshold or gait data.");
+        return;
+      }
+
+      drawStridePctHistogram(histogram, {
+        sessionId: meta.session_id || sessionId,
+        assigned,
+        total,
+        threshold: meta.ivt_threshold_px_s ?? state.gazeSpeedThreshold,
+        minDurationMs: meta.ivt_min_duration_ms ?? state.ivtMinDurationMs,
+        binWidth: histogram.bin_width ?? 10,
+      });
+
+      const unassigned = histogram.unassigned_count ?? (total - assigned);
+      $("saccade-hist-caption").textContent =
+        `${assigned} saccades with stride phase · ${unassigned} unassigned (Python ivt_saccade.py)`;
+      $("saccade-hist-modal").hidden = false;
+    }
+
+    function closeSaccadeHistogramModal() {
+      $("saccade-hist-modal").hidden = true;
+    }
+
+    function drawFourierSweepPlot(data) {
+      const canvas = $("saccade-fourier-canvas");
+      const sweep = data.sweep || [];
+      const best = data.best || {};
+      const meta = data.metadata || {};
+      if (!sweep.length) {
+        alert("Fourier sweep returned no rows.");
+        return;
+      }
+
+      const freqs = sweep.map((r) => r.f_cyc_per_stride);
+      const r2s = sweep.map((r) => r.r2);
+      const fMin = Math.min(...freqs);
+      const fMax = Math.max(...freqs);
+      const r2Min = 0;
+      const r2Max = Math.max(0.05, ...r2s);
+
+      const dpr = window.devicePixelRatio || 1;
+      const cssW = 720;
+      const cssH = 280;
+      canvas.width = Math.floor(cssW * dpr);
+      canvas.height = Math.floor(cssH * dpr);
+      canvas.style.width = `${cssW}px`;
+      canvas.style.height = `${cssH}px`;
+      const ctx = canvas.getContext("2d");
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      const margin = { l: 56, r: 24, t: 52, b: 58 };
+      const plotW = cssW - margin.l - margin.r;
+      const plotH = cssH - margin.t - margin.b;
+
+      const xScale = (f) => margin.l + ((f - fMin) / (fMax - fMin || 1)) * plotW;
+      const yScale = (r2) => margin.t + plotH - ((r2 - r2Min) / (r2Max - r2Min || 1)) * plotH;
+
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, cssW, cssH);
+
+      const xTicks = 5;
+      const yTicks = 5;
+      ctx.font = "11px Consolas, monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      for (let t = 0; t <= xTicks; t++) {
+        const frac = t / xTicks;
+        const f = fMin + frac * (fMax - fMin);
+        const x = xScale(f);
+        ctx.strokeStyle = "#e0e0e0";
+        ctx.beginPath();
+        ctx.moveTo(x + 0.5, margin.t);
+        ctx.lineTo(x + 0.5, margin.t + plotH);
+        ctx.stroke();
+        ctx.fillStyle = "#333";
+        ctx.fillText(f.toFixed(1), x, margin.t + plotH + 4);
+      }
+
+      ctx.textAlign = "right";
+      ctx.textBaseline = "middle";
+      for (let t = 0; t <= yTicks; t++) {
+        const frac = t / yTicks;
+        const r2 = r2Min + frac * (r2Max - r2Min);
+        const y = yScale(r2);
+        ctx.strokeStyle = "#e0e0e0";
+        ctx.beginPath();
+        ctx.moveTo(margin.l, y + 0.5);
+        ctx.lineTo(margin.l + plotW, y + 0.5);
+        ctx.stroke();
+        ctx.fillStyle = "#333";
+        ctx.fillText(r2.toFixed(2), margin.l - 6, y);
+      }
+
+      ctx.strokeStyle = "#333";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(margin.l, margin.t);
+      ctx.lineTo(margin.l, margin.t + plotH);
+      ctx.lineTo(margin.l + plotW, margin.t + plotH);
+      ctx.stroke();
+
+      ctx.strokeStyle = "#2a6f9e";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let i = 0; i < sweep.length; i++) {
+        const x = xScale(freqs[i]);
+        const y = yScale(r2s[i]);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      if (best.f_cyc_per_stride != null) {
+        const bx = xScale(best.f_cyc_per_stride);
+        const by = yScale(best.r2);
+        ctx.fillStyle = "#c44";
+        ctx.beginPath();
+        ctx.arc(bx, by, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "#fff";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+
+      ctx.fillStyle = "#111";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      ctx.font = "12px Segoe UI, sans-serif";
+      ctx.fillText(
+        `Fourier R² vs frequency — ${meta.session_id || sessionId}`,
+        cssW / 2,
+        10,
+      );
+      ctx.font = "10px Segoe UI, sans-serif";
+      ctx.fillStyle = "#555";
+      ctx.fillText(
+        `assigned ${meta.assigned_count ?? "—"} saccades · ${meta.bin_width_pct ?? 5}% bins · IVT ≥ ${(meta.ivt_threshold_px_s ?? state.gazeSpeedThreshold).toFixed(0)} px/s`,
+        cssW / 2,
+        28,
+      );
+
+      ctx.font = "11px Segoe UI, sans-serif";
+      ctx.fillStyle = "#222";
+      ctx.fillText("Frequency (cycles per stride)", cssW / 2, cssH - 22);
+
+      ctx.save();
+      ctx.translate(14, margin.t + plotH / 2);
+      ctx.rotate(-Math.PI / 2);
+      ctx.textAlign = "center";
+      ctx.fillText("R²", 0, 0);
+      ctx.restore();
+    }
+
+    function showSaccadeFourierFromApi(data) {
+      const best = data.best || {};
+      const meta = data.metadata || {};
+      const histogram = data.histogram || {};
+      const assigned = histogram.assigned_count ?? meta.assigned_count ?? 0;
+      const total = meta.saccade_count ?? assigned;
+
+      if (!assigned) {
+        alert("No saccades fall inside an LF stride window. Check threshold or gait data.");
+        return;
+      }
+
+      drawStridePctHistogram(
+        histogram,
+        {
+          sessionId: meta.session_id || sessionId,
+          assigned,
+          total,
+          threshold: meta.ivt_threshold_px_s ?? state.gazeSpeedThreshold,
+          minDurationMs: meta.ivt_min_duration_ms ?? state.ivtMinDurationMs,
+          binWidth: histogram.bin_width ?? meta.bin_width_pct ?? 5,
+        },
+        {
+          canvasId: "saccade-fourier-hist-canvas",
+          height: 280,
+          fourierBest: best,
+        },
+      );
+      drawFourierSweepPlot(data);
+
+      const fmt = (v, d = 4) => (v == null ? "—" : Number(v).toFixed(d));
+      $("saccade-fourier-caption").textContent =
+        `Best f = ${fmt(best.f_cyc_per_stride, 2)} cyc/stride · R² = ${fmt(best.r2, 3)} · ` +
+        `a0 = ${fmt(best.a0)} · a1 = ${fmt(best.a1)} · b1 = ${fmt(best.b1)} (Python saccade_stride_fourier.py)`;
+      $("saccade-fourier-modal").hidden = false;
+    }
+
+    function closeSaccadeFourierModal() {
+      $("saccade-fourier-modal").hidden = true;
+    }
+
+    async function generateSaccadeFourier() {
+      if (viewerMode !== "saccades") return;
+      if (state.gazeSpeedThreshold == null) {
+        alert("Set a gaze speed threshold first.");
+        return;
+      }
+
+      const btn = $("btn-fourier-fit");
+      const prevLabel = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "Computing…";
+
+      try {
+        const params = new URLSearchParams({
+          threshold: String(state.gazeSpeedThreshold),
+          min_duration_ms: String(state.ivtMinDurationMs),
+          bin_width: "5",
+        });
+        const res = await fetch(
+          `/api/sessions/${encodeURIComponent(sessionId)}/saccades/fourier?${params}`,
+        );
+        let body = null;
+        try {
+          body = await res.json();
+        } catch {
+          body = null;
+        }
+        if (!res.ok) {
+          const detail = body?.detail;
+          const msg = typeof detail === "string"
+            ? detail
+            : (res.status === 404
+              ? "Fourier endpoint not found — restart the viewer server (Ctrl+C, then uv run python serve_gait_xsens.py)"
+              : `Fourier fit failed (HTTP ${res.status})`);
+          throw new Error(msg);
+        }
+        showSaccadeFourierFromApi(body);
+      } catch (err) {
+        alert(err.message || String(err));
+      } finally {
+        btn.disabled = false;
+        btn.textContent = prevLabel;
+      }
+    }
+
+    async function generateSaccadeOnsetHistogram() {
+      if (viewerMode !== "saccades") return;
+      if (state.gazeSpeedThreshold == null) {
+        alert("Set a gaze speed threshold first.");
+        return;
+      }
+
+      const btn = $("btn-generate-saccade-onset");
+      const prevLabel = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "Computing…";
+
+      try {
+        const params = new URLSearchParams({
+          threshold: String(state.gazeSpeedThreshold),
+          min_duration_ms: String(state.ivtMinDurationMs),
+          bin_width: "10",
+        });
+        const res = await fetch(
+          `/api/sessions/${encodeURIComponent(sessionId)}/saccades/analyze?${params}`,
+        );
+        let body = null;
+        try {
+          body = await res.json();
+        } catch {
+          body = null;
+        }
+        if (!res.ok) {
+          const detail = body?.detail;
+          throw new Error(
+            typeof detail === "string" ? detail : `Analysis failed (HTTP ${res.status})`,
+          );
+        }
+        state.saccadeOnsets = body.saccades || [];
+        if (!state.saccadeOnsets.length) {
+          alert("No IVT saccades at the current threshold. Lower the gaze speed line or min duration.");
+          return;
+        }
+        showSaccadeHistogramFromApi(body);
+      } catch (err) {
+        alert(err.message || String(err));
+      } finally {
+        btn.disabled = false;
+        btn.textContent = prevLabel;
+      }
+    }
+
+    function drawIvtHighlights(ctx, w, layout) {
+      if (viewerMode !== "saccades" || !state.ivtIntervals.length) return;
+
+      const lane = gazeSpeedLaneContext();
+      const visible = visibleSignals();
+      if (!visible.length) return;
+
+      const tWin0 = state.viewStartS;
+      const tWin1 = state.viewStartS + state.viewDurationS;
+      const lanesTop = layout.offsets[0];
+      const lastIdx = visible.length - 1;
+      const lanesBottom = layout.offsets[lastIdx] + layout.heights[lastIdx];
+
+      const thresholdY = gazeSpeedThresholdY();
+
+      for (const iv of state.ivtIntervals) {
+        if (iv.end_s < tWin0 || iv.start_s > tWin1) continue;
+
+        const t0 = Math.max(iv.start_s, tWin0);
+        const t1 = Math.min(iv.end_s, tWin1);
+        const x0 = timeToX(t0, w);
+        const x1 = timeToX(t1, w);
+        const width = Math.max(1, x1 - x0);
+
+        ctx.fillStyle = IVT_HIGHLIGHT_FILL;
+        ctx.fillRect(x0, lanesTop, width, lanesBottom - lanesTop);
+
+        if (lane && thresholdY != null) {
+          ctx.fillStyle = IVT_HIGHLIGHT_ABOVE;
+          ctx.fillRect(x0, lane.laneTop, width, thresholdY - lane.laneTop);
+        }
+      }
+    }
+
+    function gazeSpeedThresholdY() {
+      const lane = gazeSpeedLaneContext();
+      if (!lane || state.gazeSpeedThreshold == null) return null;
+      const { vmin, vmax } = signalValueRange(lane.signal);
+      return valueToLaneY(
+        lane.laneTop,
+        lane.laneBottom,
+        state.gazeSpeedThreshold,
+        vmin,
+        vmax,
+      );
+    }
+
+    function nearGazeSpeedThreshold(y) {
+      const ty = gazeSpeedThresholdY();
+      return ty != null && Math.abs(y - ty) <= THRESHOLD_HIT_PX;
+    }
+
+    function drawGazeSpeedThresholdLine(ctx, w) {
+      const lane = gazeSpeedLaneContext();
+      if (!lane || state.gazeSpeedThreshold == null) return;
+
+      const { signal, laneTop, laneBottom } = lane;
+      const { vmin, vmax } = signalValueRange(signal);
+      const y = valueToLaneY(
+        laneTop,
+        laneBottom,
+        state.gazeSpeedThreshold,
+        vmin,
+        vmax,
+      );
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, laneTop, w, laneBottom - laneTop);
+      ctx.clip();
+
+      ctx.strokeStyle = GAZE_SPEED_THRESHOLD_COLOR;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(0, y + 0.5);
+      ctx.lineTo(w, y + 0.5);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.fillStyle = GAZE_SPEED_THRESHOLD_COLOR;
+      ctx.font = "11px Consolas, monospace";
+      ctx.fillText(`${state.gazeSpeedThreshold.toFixed(1)} px/s`, 6, Math.max(laneTop + 12, y - 4));
+      ctx.restore();
     }
 
     function lowerBound(times, t) {
@@ -617,22 +1676,30 @@
       return { times: outT, values: outV };
     }
 
-    function drawSignalLane(ctx, laneIdx, signal, w) {
+    function drawSignalLane(ctx, laneIdx, signal, w, layout) {
       const times = signal.times_s;
       const values = signal.values;
       if (!times?.length) return;
+
+      const laneTop = layout.offsets[laneIdx];
+      const laneH = layout.heights[laneIdx];
+      const laneBottom = laneTop + laneH;
 
       const t0 = state.viewStartS;
       const t1 = state.viewStartS + state.viewDurationS;
       const { vmin, vmax } = signalValueRange(signal);
       const color = SIGNAL_COLORS[signal.id] || "#dcdcaa";
-      const yBase = laneIdx * LANE_H;
       const isStrideSeries = Array.isArray(signal.stride_index);
 
       let plot = sliceWindow(times, values, t0, t1);
       if (!isStrideSeries) {
         plot = decimate(plot.times, plot.values, Math.max(64, w * 2));
       }
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, laneTop, w, laneH);
+      ctx.clip();
 
       ctx.strokeStyle = color;
       ctx.fillStyle = color;
@@ -647,7 +1714,7 @@
           continue;
         }
         const x = timeToX(plot.times[i], w);
-        const y = valueToLaneY(laneIdx, v, vmin, vmax);
+        const y = valueToLaneY(laneTop, laneBottom, v, vmin, vmax);
         if (!started) {
           ctx.moveTo(x, y);
           started = true;
@@ -662,7 +1729,7 @@
           const t = times[i];
           if (t < t0 - 0.5 || t > t1 + 0.5) continue;
           const x = timeToX(t, w);
-          const y = valueToLaneY(laneIdx, values[i], vmin, vmax);
+          const y = valueToLaneY(laneTop, laneBottom, values[i], vmin, vmax);
           const outlier = signal.is_outlier && signal.is_outlier[i];
           ctx.beginPath();
           ctx.fillStyle = outlier ? "#ce9178" : color;
@@ -677,7 +1744,8 @@
       const rangeText = signal.unit === "m"
         ? `${fmtScaleValue(vmin, "m")}–${fmtScaleValue(vmax, "m")} cm${scaleLabel}`
         : `${vmin.toFixed(3)}–${vmax.toFixed(3)} ${signal.unit || ""}${scaleLabel}`;
-      ctx.fillText(rangeText, 4, yBase + 11);
+      ctx.fillText(rangeText, 4, laneTop + 11);
+      ctx.restore();
     }
 
     function interpolateAtTime(signal, tS) {
@@ -712,7 +1780,7 @@
     function drawWaves() {
       const w = waveCanvas.clientWidth;
       const h = waveCanvas.clientHeight;
-      const lanes = laneCount();
+      const layout = laneLayout();
       waveCtx.fillStyle = "#1e1e1e";
       waveCtx.fillRect(0, 0, w, h);
 
@@ -728,29 +1796,37 @@
         waveCtx.stroke();
       }
 
-      for (let i = 0; i < lanes; i++) {
-        const y = i * LANE_H;
+      for (let i = 0; i < layout.heights.length; i++) {
+        const y = layout.offsets[i];
+        const laneH = layout.heights[i];
         waveCtx.fillStyle = i % 2 === 0 ? "#2d2d30" : "#333337";
-        waveCtx.fillRect(0, y, w, LANE_H);
+        waveCtx.fillRect(0, y, w, laneH);
         waveCtx.strokeStyle = "#2f2f2f";
         waveCtx.beginPath();
-        waveCtx.moveTo(0, y + LANE_H);
-        waveCtx.lineTo(w, y + LANE_H);
+        waveCtx.moveTo(0, y + laneH);
+        waveCtx.lineTo(w, y + laneH);
         waveCtx.stroke();
       }
 
-      state.signals.forEach((signal, idx) => drawSignalLane(waveCtx, idx, signal, w));
+      if (viewerMode === "saccades") {
+        drawIvtHighlights(waveCtx, w, layout);
+      }
 
-      drawGaitMarkers(waveCtx, w, laneCount() * LANE_H);
+      visibleSignals().forEach((signal, idx) => drawSignalLane(waveCtx, idx, signal, w, layout));
+
+      if (viewerMode === "saccades") {
+        drawGazeSpeedThresholdLine(waveCtx, w);
+      }
+
+      drawGaitMarkers(waveCtx, w, layout.total);
 
       if (state.cursorS != null) {
         const cx = timeToX(state.cursorS, w);
-        const laneH = laneCount() * LANE_H;
         waveCtx.strokeStyle = "#f44747";
         waveCtx.lineWidth = 1;
         waveCtx.beginPath();
         waveCtx.moveTo(cx + 0.5, 0);
-        waveCtx.lineTo(cx + 0.5, laneH);
+        waveCtx.lineTo(cx + 0.5, layout.total);
         waveCtx.stroke();
       }
     }
@@ -806,6 +1882,7 @@
         if (signal.unit === "m") return `${(value * 100).toFixed(2)} cm`;
         if (signal.unit === "deg") return `${value.toFixed(2)}°`;
         if (signal.unit === "deg/s") return `${value.toFixed(2)}°/s`;
+        if (signal.unit === "px/s") return `${value.toFixed(1)} px/s`;
         if (signal.unit === "px") return `${value.toFixed(1)} px`;
         return String(value);
       }
@@ -813,7 +1890,7 @@
       if (state.signalLoadError) {
         $("signal-readout").innerHTML = `<div style="color:#f44747">${state.signalLoadError}</div>`;
       } else if (state.signals.length) {
-        let html = state.signals.map((s) => {
+        let html = visibleSignals().map((s) => {
           const n = s.stride_index ? `${s.times_s.length} strides` : `${s.times_s.length.toLocaleString()} samples`;
           const meanNote = s.signal_mean != null
             ? (s.unit === "deg"
@@ -827,7 +1904,7 @@
         }
         if (state.cursorS != null) {
           html += `<div style="margin-top:0.35rem"><strong>At cursor</strong></div>`;
-          for (const s of state.signals) {
+          for (const s of visibleSignals()) {
             const hit = interpolateAtTime(s, state.cursorS);
             html += `<div>${s.label}: ${fmtSignalValue(s, hit?.value)}</div>`;
           }
@@ -870,7 +1947,7 @@
       const t0 = state.viewStartS;
       const t1 = state.viewStartS + state.viewDurationS;
 
-      for (const signal of state.signals) {
+      for (const signal of visibleSignals()) {
         const ys = ensureYScale(signal.id);
         const autoRange = valueRangeInWindow(signal.times_s, signal.values, t0, t1);
         const unitHint = signal.unit === "m" ? "cm" : (signal.unit || "");
@@ -963,20 +2040,92 @@
       }
     }
 
+    function buildRowHeightPanel() {
+      const container = $("row-height-rows");
+      container.replaceChildren();
+
+      for (const signal of state.signals) {
+        const row = document.createElement("div");
+        row.className = "y-scale-row";
+
+        const label = document.createElement("div");
+        label.className = "y-scale-label";
+        label.textContent = signal.label;
+        label.title = signal.label;
+
+        const input = document.createElement("input");
+        input.type = "number";
+        input.min = String(MIN_LANE_H);
+        input.max = String(MAX_LANE_H);
+        input.step = "1";
+        input.value = String(laneHeightForSignal(signal));
+        input.title = "Row height (px)";
+        input.style.width = "100%";
+        input.style.padding = "0.2rem 0.3rem";
+        input.style.font = "inherit";
+        input.style.fontSize = "0.7rem";
+        input.style.background = "#1a1a1a";
+        input.style.color = "var(--text)";
+        input.style.border = "1px solid var(--border)";
+        input.style.borderRadius = "3px";
+
+        const applyHeight = () => {
+          const h = clampLaneHeight(input.value);
+          state.laneHeight[signal.id] = h;
+          input.value = String(h);
+          buildNameRows();
+          resizeCanvases();
+        };
+
+        input.addEventListener("change", applyHeight);
+        input.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") applyHeight();
+        });
+
+        row.append(label, input);
+        container.appendChild(row);
+      }
+    }
+
     function buildNameRows() {
       const container = $("name-rows");
       container.replaceChildren();
-      const lanes = laneCount();
-      for (let i = 0; i < lanes; i++) {
+      const layout = laneLayout();
+      const visible = visibleSignals();
+      for (let i = 0; i < layout.heights.length; i++) {
+        const laneH = layout.heights[i];
         const row = document.createElement("div");
-        row.className = "name-row" + (i < state.signals.length ? " active" : "");
-        if (i < state.signals.length) {
-          row.textContent = state.signals[i].label;
+        row.style.height = `${laneH}px`;
+        if (i < visible.length) {
+          const signal = visible[i];
+          row.className = "name-row active";
+          row.textContent = signal.label;
+          row.title = `${signal.label} — click to hide`;
+          row.addEventListener("click", () => setSignalVisible(signal.id, false));
         } else {
-          row.textContent = `— empty lane ${i - state.signals.length + 1} —`;
+          row.className = "name-row";
+          row.textContent = `— empty lane ${i - visible.length + 1} —`;
         }
         container.appendChild(row);
       }
+    }
+
+    function bindScrollSync() {
+      const names = $("name-rows");
+      const waveWrap = $("canvas-wrap");
+      let syncing = false;
+      waveWrap.addEventListener("scroll", () => {
+        if (syncing) return;
+        syncing = true;
+        names.scrollTop = waveWrap.scrollTop;
+        syncing = false;
+      });
+      names.addEventListener("scroll", () => {
+        if (syncing) return;
+        syncing = true;
+        waveWrap.scrollTop = names.scrollTop;
+        syncing = false;
+      });
     }
 
     async function loadSession() {
@@ -1008,7 +2157,7 @@
       );
       if (sigRes.ok) {
         const bundle = await sigRes.json();
-        state.signals = bundle.signals || [];
+        state.signals = applyViewerSignals(bundle.signals || []);
         state.markers = bundle.markers || [];
         state.waveMissing = bundle.missing || [];
         state.signalLoadError = null;
@@ -1022,10 +2171,27 @@
         state.signalLoadError = `Wave signals failed (HTTP ${sigRes.status}). ${hint}`;
       }
 
+      initSignalVisibility();
+      initLaneHeights();
+      initGazeSpeedThreshold();
+      buildLaneToggles();
       buildNameRows();
+      buildRowHeightPanel();
       buildYScalePanel();
       resizeCanvases();
     }
+
+    $("btn-lanes-all").addEventListener("click", () => setAllSignalsVisible(true));
+    $("btn-lanes-none").addEventListener("click", () => setAllSignalsVisible(false));
+
+    $("btn-row-height-reset").addEventListener("click", () => {
+      for (const signal of state.signals) {
+        state.laneHeight[signal.id] = defaultLaneHeightForSignal(signal.id);
+      }
+      buildRowHeightPanel();
+      buildNameRows();
+      resizeCanvases();
+    });
 
     $("btn-y-auto-all").addEventListener("click", () => {
       for (const signal of state.signals) {
@@ -1037,6 +2203,8 @@
       buildYScalePanel();
       drawAll();
     });
+
+    bindScrollSync();
 
     $("time-scroll").addEventListener("input", (e) => {
       state.viewStartS = Number(e.target.value) / 1000;
@@ -1072,7 +2240,83 @@
       $("btn-cursor").classList.toggle("active", state.cursorMode);
     });
 
-    $("canvas-wrap").addEventListener("click", (e) => {
+    $("gaze-speed-threshold-input").addEventListener("change", (e) => {
+      const value = Number(e.target.value);
+      if (!Number.isFinite(value)) return;
+      setGazeSpeedThreshold(value);
+    });
+    $("gaze-speed-threshold-input").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") e.target.dispatchEvent(new Event("change"));
+    });
+
+    $("ivt-min-duration-input").addEventListener("change", (e) => {
+      const ms = Number(e.target.value);
+      if (!Number.isFinite(ms) || ms < 0) return;
+      state.ivtMinDurationMs = ms;
+      e.target.value = String(ms);
+      recomputeIvtIntervals();
+      drawAll();
+    });
+    $("ivt-min-duration-input").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") e.target.dispatchEvent(new Event("change"));
+    });
+
+    $("btn-generate-saccade-onset").addEventListener("click", generateSaccadeOnsetHistogram);
+    $("btn-fourier-fit").addEventListener("click", generateSaccadeFourier);
+    $("saccade-hist-close").addEventListener("click", closeSaccadeHistogramModal);
+    $("saccade-hist-backdrop").addEventListener("click", closeSaccadeHistogramModal);
+    $("saccade-fourier-close").addEventListener("click", closeSaccadeFourierModal);
+    $("saccade-fourier-backdrop").addEventListener("click", closeSaccadeFourierModal);
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !$("saccade-hist-modal").hidden) {
+        closeSaccadeHistogramModal();
+      }
+      if (e.key === "Escape" && !$("saccade-fourier-modal").hidden) {
+        closeSaccadeFourierModal();
+      }
+    });
+
+    const canvasWrap = $("canvas-wrap");
+
+    canvasWrap.addEventListener("mousemove", (e) => {
+      const { y } = canvasCoords(e);
+      if (state.gazeSpeedThresholdDragging) {
+        state.gazeSpeedThresholdDidDrag = true;
+        const lane = gazeSpeedLaneContext();
+        if (lane) {
+          const { vmin, vmax } = signalValueRange(lane.signal);
+          const value = laneYToValue(lane.laneTop, lane.laneBottom, y, vmin, vmax);
+          setGazeSpeedThreshold(Math.max(vmin, Math.min(vmax, value)));
+        }
+        return;
+      }
+      if (viewerMode === "saccades" && nearGazeSpeedThreshold(y)) {
+        canvasWrap.style.cursor = "ns-resize";
+      } else {
+        canvasWrap.style.cursor = "";
+      }
+    });
+
+    canvasWrap.addEventListener("mousedown", (e) => {
+      if (viewerMode !== "saccades") return;
+      const { y } = canvasCoords(e);
+      if (!nearGazeSpeedThreshold(y)) return;
+      state.gazeSpeedThresholdDragging = true;
+      state.gazeSpeedThresholdDidDrag = false;
+      e.preventDefault();
+    });
+
+    window.addEventListener("mouseup", () => {
+      state.gazeSpeedThresholdDragging = false;
+    });
+
+    canvasWrap.addEventListener("click", (e) => {
+      if (state.gazeSpeedThresholdDidDrag) {
+        state.gazeSpeedThresholdDidDrag = false;
+        return;
+      }
+      const { y } = canvasCoords(e);
+      if (nearGazeSpeedThreshold(y)) return;
       if (!state.cursorMode) return;
       const rect = waveCanvas.getBoundingClientRect();
       const x = e.clientX - rect.left;

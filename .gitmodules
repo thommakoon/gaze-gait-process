@@ -7,3 +7,6 @@
 [submodule "external/OpenEye"]
 	path = external/OpenEye
 	url = https://github.com/thommakoon/OpenEye.git
+[submodule "QuestApp-PracticeTask"]
+	path = QuestApp-PracticeTask
+	url = https://github.com/thommakoon/QuestApp-PracticeTask.git

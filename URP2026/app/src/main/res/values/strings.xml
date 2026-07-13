@@ -21,15 +21,23 @@
     <string name="qtpy_btn_connect">QT Py connect USB</string>
     <string name="qtpy_btn_disconnect">QT Py disconnect</string>
     <string name="qtpy_btn_clear_monitor">Clear serial monitor</string>
+    <string name="qtpy_btn_calibrate">CMD Calibrate</string>
+    <string name="qtpy_btn_start_stream">CMD Start stream</string>
+    <string name="qtpy_btn_stop_stream">CMD Stop</string>
+    <string name="pc_bridge_section_title">PC wireless bridge (Wi‑Fi)</string>
+    <string name="pc_bridge_hint">PC → phone HTTP → USB CMD to QT Py. Same Wi‑Fi / hotspot as phone.</string>
+    <string name="pc_bridge_btn_start">Start PC bridge (:8765)</string>
+    <string name="pc_bridge_btn_stop">Stop PC bridge</string>
     <string name="qtpy_verbose_serial_switch">Verbose serial monitor</string>
     <string name="qtpy_verbose_timing_switch">Verbose timing &amp; recv</string>
-    <string name="qtpy_status_line">QT Py: connected=%1$s, reading=%2$s, lines=%3$s</string>
+    <string name="qtpy_status_line">QT Py: connected=%1$s, reading=%2$s, lines=%3$s, firmware=%4$s</string>
+    <string name="qtpy_firmware_hint">Start both needs firmware=STREAMING (Calibrate → Start).</string>
     <string name="qtpy_last_line">Last line: %1$s</string>
     <string name="qtpy_timing_line">Timing: seq=%1$s, time_us=%2$s, ext_us=%3$s</string>
     <string name="qtpy_recv_time_line">Recv: elapsed_ns=%1$s, wall_ns=%2$s</string>
     <string name="qtpy_monitor_title">QT Py serial monitor (recent lines)</string>
     <string name="qtpy_monitor_empty">No serial lines yet. Connect QT Py and start streaming.</string>
-    <string name="flow_section_title">Main flow (QTPy first, then both)</string>
+    <string name="flow_section_title">Main flow (QTPy STREAMING first, then both)</string>
     <string name="flow_btn_start_both">Start both recording</string>
     <string name="flow_btn_stop_both">Stop both recording</string>
     <string name="qtpy_latency_diag_title">QT Py → phone latency (diag)</string>

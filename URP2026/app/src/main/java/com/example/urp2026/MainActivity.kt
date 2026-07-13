@@ -36,6 +36,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.example.urp2026.integration.ImuRecorderIntegration
 import com.example.urp2026.qtpy.QtPyLinkLatencyDiagnostics
 import com.example.urp2026.ui.theme.URP2026Theme
@@ -71,6 +73,7 @@ fun NeonProbeScreen(
         onDispose { integration.close() }
     }
     val qtPyState by integration.qtPyStateFlow().collectAsState()
+    val pcBridgeState by integration.pcBridgeStateFlow().collectAsState()
     val monitorScroll = rememberScrollState()
     var log by remember { mutableStateOf("") }
     var lastResult by remember { mutableStateOf("") }
@@ -114,6 +117,31 @@ fun NeonProbeScreen(
         }
     }
 
+    // After USB permission dialog, finish connect if Android already granted access.
+    val activity = context as? ComponentActivity
+    DisposableEffect(activity, integration) {
+        if (activity == null) return@DisposableEffect onDispose { }
+        val observer = LifecycleEventObserver { _, event ->
+            if (event != Lifecycle.Event.ON_RESUME) return@LifecycleEventObserver
+            if (busy || integration.qtPyReady()) return@LifecycleEventObserver
+            scope.launch {
+                val result = try {
+                    integration.qtPyTryConnectIfPermitted()
+                } catch (e: Exception) {
+                    "${e.javaClass.simpleName}: ${e.message}"
+                } ?: return@launch
+                val line = "qtpy_auto_connect → $result"
+                lastResult = line
+                append(line)
+                if (result.contains("connected", ignoreCase = true)) {
+                    Toast.makeText(context, result, Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+        activity.lifecycle.addObserver(observer)
+        onDispose { activity.lifecycle.removeObserver(observer) }
+    }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -141,8 +169,13 @@ fun NeonProbeScreen(
                 qtPyState.connected.toString(),
                 qtPyState.reading.toString(),
                 qtPyState.linesReceived.toString(),
+                qtPyState.firmwareState.name,
             ),
             style = MaterialTheme.typography.labelMedium,
+        )
+        Text(
+            text = stringResource(R.string.qtpy_firmware_hint),
+            style = MaterialTheme.typography.bodySmall,
         )
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -242,6 +275,65 @@ fun NeonProbeScreen(
             enabled = !busy,
         ) { Text(stringResource(R.string.qtpy_btn_clear_monitor)) }
 
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Button(
+                onClick = { runNeon("qtpy_cmd") { integration.qtPySendCommand("CALIBRATE") } },
+                enabled = !busy && qtPyState.connected,
+                modifier = Modifier.weight(1f),
+            ) { Text(stringResource(R.string.qtpy_btn_calibrate)) }
+            Button(
+                onClick = { runNeon("qtpy_cmd") { integration.qtPySendCommand("START") } },
+                enabled = !busy && qtPyState.connected,
+                modifier = Modifier.weight(1f),
+            ) { Text(stringResource(R.string.qtpy_btn_start_stream)) }
+            Button(
+                onClick = { runNeon("qtpy_cmd") { integration.qtPySendCommand("STOP") } },
+                enabled = !busy && qtPyState.connected,
+                modifier = Modifier.weight(1f),
+            ) { Text(stringResource(R.string.qtpy_btn_stop_stream)) }
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+        Text(
+            text = stringResource(R.string.pc_bridge_section_title),
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Text(
+            text = stringResource(R.string.pc_bridge_hint),
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Text(
+            text = pcBridgeState.status,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        if (pcBridgeState.bindHint.isNotEmpty()) {
+            Text(
+                text = pcBridgeState.bindHint,
+                style = MaterialTheme.typography.labelMedium,
+            )
+        }
+        Button(
+            onClick = {
+                val msg = integration.pcBridgeStart()
+                append("pc_bridge → $msg")
+                lastResult = msg
+                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+            },
+            enabled = !busy && !pcBridgeState.running,
+        ) { Text(stringResource(R.string.pc_bridge_btn_start)) }
+        Button(
+            onClick = {
+                val msg = integration.pcBridgeStop()
+                append("pc_bridge → $msg")
+                lastResult = msg
+                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+            },
+            enabled = !busy && pcBridgeState.running,
+        ) { Text(stringResource(R.string.pc_bridge_btn_stop)) }
+
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
         Text(
             text = stringResource(R.string.flow_section_title),
@@ -249,7 +341,7 @@ fun NeonProbeScreen(
         )
         Button(
             onClick = { runNeon("start_both") { integration.startBothIfQtPyConnected() } },
-            enabled = !busy && qtPyState.connected && !combinedActive,
+            enabled = !busy && qtPyState.isStreaming && !combinedActive,
         ) { Text(stringResource(R.string.flow_btn_start_both)) }
         Button(
             onClick = { runNeon("stop_both") { integration.stopBothSession() } },

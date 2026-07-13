@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.os.Build
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import com.hoho.android.usbserial.driver.UsbSerialDriver
@@ -21,9 +22,13 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlin.coroutines.resume
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.cancellation.CancellationException
+import kotlin.coroutines.resume
+import kotlinx.coroutines.suspendCancellableCoroutine
 
 data class QtPyLineRecord(
     val rawLine: String,
@@ -34,9 +39,19 @@ data class QtPyLineRecord(
     val timeUsExtended: Long? = null,
 )
 
+/** Firmware state machine from sketch_usb_dual_* (parsed from STATE:* lines). */
+enum class QtPyFirmwareState {
+    UNKNOWN,
+    WAITING,
+    CALIBRATING,
+    READY,
+    STREAMING,
+}
+
 data class QtPyBridgeState(
     val connected: Boolean = false,
     val reading: Boolean = false,
+    val firmwareState: QtPyFirmwareState = QtPyFirmwareState.UNKNOWN,
     val linesReceived: Long = 0,
     val lastLine: String = "",
     val recentLines: List<String> = emptyList(),
@@ -47,7 +62,9 @@ data class QtPyBridgeState(
     val lastTimeUs: Long? = null,
     val lastTimeUsExtended: Long? = null,
     val status: String = "Idle",
-)
+) {
+    val isStreaming: Boolean get() = connected && firmwareState == QtPyFirmwareState.STREAMING
+}
 
 class QtPySerialBridge(
     private val context: Context,
@@ -56,19 +73,66 @@ class QtPySerialBridge(
     private val appContext = context.applicationContext
     private val usbManager = appContext.getSystemService(Context.USB_SERVICE) as UsbManager
     private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val connectMutex = Mutex()
 
     private var activeDriver: UsbSerialDriver? = null
     private var activePort: UsbSerialPort? = null
     private var readJob: Job? = null
     private val closed = AtomicBoolean(false)
     private val timeUsExtender = TimeUsExtender()
+    private val permissionReceiverRegistered = AtomicBoolean(false)
+    @Volatile
+    private var pendingPermissionDeviceId: Int? = null
     @Volatile
     private var lineRecordListener: ((QtPyLineRecord) -> Unit)? = null
 
     private val _state = MutableStateFlow(QtPyBridgeState())
     val state: StateFlow<QtPyBridgeState> = _state.asStateFlow()
 
+    private val permissionReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action != ACTION_USB_PERMISSION) return
+            val device: UsbDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+            }
+            val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+            pendingPermissionDeviceId = null
+            val permitted = granted ||
+                (device != null && usbManager.hasPermission(device)) ||
+                (findDriver()?.let { usbManager.hasPermission(it.device) } == true)
+
+            if (!permitted) {
+                _state.value = _state.value.copy(
+                    status = "USB permission denied${device?.let { " for ${it.deviceName}" } ?: ""}.",
+                )
+                return
+            }
+
+            // Permission dialog often pauses/cancels the UI connect() coroutine.
+            // Always finish open on the bridge scope so one "Yes" is enough.
+            ioScope.launch {
+                val msg = connectMutex.withLock {
+                    if (_state.value.connected) return@withLock "QT Py already connected."
+                    val driver = findDriver()
+                        ?: return@withLock "No USB serial device found after permission grant."
+                    if (!usbManager.hasPermission(driver.device)) {
+                        return@withLock "USB permission not active yet; tap Connect again."
+                    }
+                    openPortLocked(driver)
+                }
+                if (!_state.value.connected) {
+                    _state.value = _state.value.copy(status = msg)
+                }
+            }
+        }
+    }
+
     fun isReady(): Boolean = _state.value.connected
+    fun isStreaming(): Boolean = _state.value.isStreaming
+    fun firmwareState(): QtPyFirmwareState = _state.value.firmwareState
 
     fun setLineRecordListener(listener: ((QtPyLineRecord) -> Unit)?) {
         lineRecordListener = listener
@@ -83,26 +147,118 @@ class QtPySerialBridge(
         )
     }
 
+    /**
+     * Open serial if a device is present and already permitted.
+     * Used after resume when the permission dialog interrupted the first connect().
+     * @return status string if an attempt was made; null if nothing to do.
+     */
+    suspend fun tryConnectIfPermitted(): String? = withContext(Dispatchers.IO) {
+        connectMutex.withLock {
+            if (_state.value.connected) return@withContext null
+            val driver = findDriver() ?: return@withContext null
+            if (!usbManager.hasPermission(driver.device)) return@withContext null
+            openPortLocked(driver)
+        }
+    }
+
     suspend fun connect(): String = withContext(Dispatchers.IO) {
         if (_state.value.connected) return@withContext "QT Py already connected."
 
-        val driver = UsbSerialProber.getDefaultProber().findAllDrivers(usbManager).firstOrNull()
+        val driver = findDriver()
             ?: return@withContext "No USB serial device found. Plug QT Py via OTG."
 
+        // Do not hold connectMutex while the system permission dialog is up — that
+        // would deadlock the standing permissionReceiver that finishes open on grant.
         if (!usbManager.hasPermission(driver.device)) {
+            _state.value = _state.value.copy(status = "Waiting for USB permission…")
             val granted = requestUsbPermission(driver.device)
-            if (!granted) {
-                return@withContext "USB permission denied for ${driver.device.deviceName}."
+            if (!usbManager.hasPermission(driver.device)) {
+                return@withContext if (granted) {
+                    "USB permission granted — opening…"
+                } else {
+                    "USB permission denied for ${driver.device.deviceName}."
+                }
             }
+            _state.value = _state.value.copy(status = "Permission granted — opening port…")
         }
 
+        connectMutex.withLock {
+            if (_state.value.connected) return@withContext "QT Py already connected."
+            val again = findDriver()
+                ?: return@withContext "No USB serial device found. Plug QT Py via OTG."
+            if (!usbManager.hasPermission(again.device)) {
+                return@withContext "USB permission not active; tap Connect again."
+            }
+            openPortLocked(again)
+        }
+    }
+
+    suspend fun disconnect(): String = withContext(Dispatchers.IO) {
+        connectMutex.withLock {
+            stopReaderInternal()
+            val port = activePort
+            activePort = null
+            activeDriver = null
+            try {
+                port?.close()
+            } catch (_: Exception) {
+            }
+            _state.value = _state.value.copy(
+                connected = false,
+                reading = false,
+                firmwareState = QtPyFirmwareState.UNKNOWN,
+                status = "Disconnected",
+            )
+            "QT Py disconnected."
+        }
+    }
+
+    /**
+     * Send a newline-framed command to QT Py firmware (sketch_usb_dual_100_cmd).
+     * Accepts `CALIBRATE` or `CMD:CALIBRATE` (prefix added if missing).
+     */
+    suspend fun writeCommand(command: String): String = withContext(Dispatchers.IO) {
+        val raw = command.trim()
+        if (raw.isEmpty()) return@withContext "Empty command."
+        val line = if (raw.startsWith("CMD:", ignoreCase = true)) {
+            raw.uppercase()
+        } else {
+            "CMD:${raw.uppercase()}"
+        }
+        connectMutex.withLock {
+            val port = activePort
+                ?: return@withLock "QT Py not connected over USB."
+            try {
+                val bytes = (line + "\n").toByteArray(Charsets.UTF_8)
+                port.write(bytes, WRITE_TIMEOUT_MS)
+                _state.value = _state.value.copy(status = "Sent $line")
+                "Sent $line"
+            } catch (e: Exception) {
+                "Write failed: ${e.message ?: e.javaClass.simpleName}"
+            }
+        }
+    }
+
+    fun close() {
+        if (!closed.compareAndSet(false, true)) return
+        unregisterPermissionReceiver()
+        ioScope.launch { disconnect() }
+        ioScope.cancel()
+    }
+
+    private fun findDriver(): UsbSerialDriver? =
+        UsbSerialProber.getDefaultProber().findAllDrivers(usbManager).firstOrNull()
+
+    private fun openPortLocked(driver: UsbSerialDriver): String {
+        if (_state.value.connected) return "QT Py already connected."
+
         val connection = usbManager.openDevice(driver.device)
-            ?: return@withContext "openDevice failed (permission or busy USB port)."
+            ?: return "openDevice failed (permission or busy USB port)."
 
         val port = driver.ports.firstOrNull()
-            ?: return@withContext "No serial port exposed by USB driver."
+            ?: return "No serial port exposed by USB driver."
 
-        try {
+        return try {
             port.open(connection)
             port.setParameters(baudRate, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
             port.dtr = true
@@ -111,40 +267,25 @@ class QtPySerialBridge(
             activePort = port
             _state.value = _state.value.copy(
                 connected = true,
+                firmwareState = QtPyFirmwareState.UNKNOWN,
                 status = "Connected @ ${baudRate}bps to ${driver.device.deviceName}",
             )
             startReader()
+            // One-shot: ask firmware to reprint STATE:* (sketch_usb_dual_100_cmd).
+            // Does not run on the IMU hot path; ignored by older sketches without CMD:*.
+            ioScope.launch {
+                writeCommand("STATUS")
+            }
             "QT Py connected."
         } catch (e: Exception) {
             try {
                 port.close()
             } catch (_: Exception) {
             }
+            activePort = null
+            activeDriver = null
             "Connect failed: ${e.message ?: e.javaClass.simpleName}"
         }
-    }
-
-    suspend fun disconnect(): String = withContext(Dispatchers.IO) {
-        stopReaderInternal()
-        val port = activePort
-        activePort = null
-        activeDriver = null
-        try {
-            port?.close()
-        } catch (_: Exception) {
-        }
-        _state.value = _state.value.copy(
-            connected = false,
-            reading = false,
-            status = "Disconnected",
-        )
-        "QT Py disconnected."
-    }
-
-    fun close() {
-        if (!closed.compareAndSet(false, true)) return
-        ioScope.launch { disconnect() }
-        ioScope.cancel()
     }
 
     private fun startReader() {
@@ -167,6 +308,7 @@ class QtPySerialBridge(
                         if (raw.isNotEmpty()) {
                             val recvElapsedNs = SystemClock.elapsedRealtimeNanos()
                             val recvWallNs = System.currentTimeMillis() * 1_000_000L
+                            val fwFromLine = parseFirmwareStateLine(raw)
                             val parsed = parseSeqTimeUs(raw)
                             val extUs = parsed?.timeUs?.let { timeUsExtender.extend(it) }
                             val record = QtPyLineRecord(
@@ -179,6 +321,7 @@ class QtPySerialBridge(
                             )
                             val updatedRecent = (_state.value.recentLines + raw).takeLast(200)
                             val updatedRecords = (_state.value.recentRecords + record).takeLast(400)
+                            val nextFw = fwFromLine ?: _state.value.firmwareState
                             _state.value = _state.value.copy(
                                 linesReceived = _state.value.linesReceived + 1,
                                 lastLine = raw,
@@ -189,7 +332,12 @@ class QtPySerialBridge(
                                 lastSeq = parsed?.seq ?: _state.value.lastSeq,
                                 lastTimeUs = parsed?.timeUs ?: _state.value.lastTimeUs,
                                 lastTimeUsExtended = extUs ?: _state.value.lastTimeUsExtended,
-                                status = "Reading lines…",
+                                firmwareState = nextFw,
+                                status = if (fwFromLine != null) {
+                                    "Firmware: ${fwFromLine.name}"
+                                } else {
+                                    "Reading lines…"
+                                },
                             )
                             lineRecordListener?.invoke(record)
                         }
@@ -199,6 +347,7 @@ class QtPySerialBridge(
                     _state.value = _state.value.copy(
                         reading = false,
                         connected = false,
+                        firmwareState = QtPyFirmwareState.UNKNOWN,
                         status = "Read error: ${e.message ?: e.javaClass.simpleName}",
                     )
                     activePort = null
@@ -217,39 +366,103 @@ class QtPySerialBridge(
         }
     }
 
-    private suspend fun requestUsbPermission(device: UsbDevice): Boolean =
-        withContext(Dispatchers.Main) {
-            val action = "com.example.urp2026.USB_PERMISSION"
-            val permissionIntent = PendingIntent.getBroadcast(
-                appContext,
-                0,
-                Intent(action),
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-            )
-            kotlinx.coroutines.suspendCancellableCoroutine { cont ->
-                val receiver = object : BroadcastReceiver() {
-                    override fun onReceive(context: Context, intent: Intent) {
-                        if (intent.action != action) return
-                        appContext.unregisterReceiver(this)
-                        val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
-                        if (cont.isActive) cont.resume(granted) {}
+    private fun ensurePermissionReceiver() {
+        if (!permissionReceiverRegistered.compareAndSet(false, true)) return
+        ContextCompat.registerReceiver(
+            appContext,
+            permissionReceiver,
+            IntentFilter(ACTION_USB_PERMISSION),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+    }
+
+    private fun unregisterPermissionReceiver() {
+        if (!permissionReceiverRegistered.compareAndSet(true, false)) return
+        try {
+            appContext.unregisterReceiver(permissionReceiver)
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * Asks for USB permission. Uses a mutable PendingIntent (required so UsbManager can
+     * attach grant/deny extras on Android 12+). The standing [permissionReceiver] also
+     * opens the port on grant, so a cancelled UI coroutine still finishes connect.
+     */
+    private suspend fun requestUsbPermission(device: UsbDevice): Boolean {
+        ensurePermissionReceiver()
+        pendingPermissionDeviceId = device.deviceId
+
+        val piFlags = PendingIntent.FLAG_UPDATE_CURRENT or
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                PendingIntent.FLAG_MUTABLE
+            } else {
+                0
+            }
+        val permissionIntent = PendingIntent.getBroadcast(
+            appContext,
+            device.deviceId,
+            Intent(ACTION_USB_PERMISSION).setPackage(appContext.packageName),
+            piFlags,
+        )
+
+        return try {
+            withContext(Dispatchers.Main) {
+                suspendCancellableCoroutine { cont ->
+                    // One-shot waiter for this connect() call. Do NOT unregister the
+                    // standing permissionReceiver on cancel — that receiver finishes open.
+                    val waiter = object : BroadcastReceiver() {
+                        override fun onReceive(context: Context, intent: Intent) {
+                            if (intent.action != ACTION_USB_PERMISSION) return
+                            try {
+                                appContext.unregisterReceiver(this)
+                            } catch (_: Exception) {
+                            }
+                            val granted = intent.getBooleanExtra(
+                                UsbManager.EXTRA_PERMISSION_GRANTED,
+                                false,
+                            ) || usbManager.hasPermission(device)
+                            if (cont.isActive) cont.resume(granted)
+                        }
                     }
-                }
-                ContextCompat.registerReceiver(
-                    appContext,
-                    receiver,
-                    IntentFilter(action),
-                    ContextCompat.RECEIVER_NOT_EXPORTED,
-                )
-                usbManager.requestPermission(device, permissionIntent)
-                cont.invokeOnCancellation {
-                    try {
-                        appContext.unregisterReceiver(receiver)
-                    } catch (_: Exception) {
+                    ContextCompat.registerReceiver(
+                        appContext,
+                        waiter,
+                        IntentFilter(ACTION_USB_PERMISSION),
+                        ContextCompat.RECEIVER_NOT_EXPORTED,
+                    )
+                    usbManager.requestPermission(device, permissionIntent)
+                    cont.invokeOnCancellation {
+                        try {
+                            appContext.unregisterReceiver(waiter)
+                        } catch (_: Exception) {
+                        }
+                        // Standing permissionReceiver remains registered.
                     }
                 }
             }
+        } catch (_: CancellationException) {
+            // UI scope cancelled while dialog was up; standing receiver may still open.
+            usbManager.hasPermission(device)
         }
+    }
+
+    companion object {
+        private const val ACTION_USB_PERMISSION = "com.example.urp2026.USB_PERMISSION"
+        private const val WRITE_TIMEOUT_MS = 1000
+    }
+}
+
+private fun parseFirmwareStateLine(line: String): QtPyFirmwareState? {
+    if (!line.startsWith("STATE:")) return null
+    return when (line.substringAfter("STATE:").trim().uppercase()) {
+        "WAITING" -> QtPyFirmwareState.WAITING
+        "CALIBRATING" -> QtPyFirmwareState.CALIBRATING
+        "READY" -> QtPyFirmwareState.READY
+        "STREAMING" -> QtPyFirmwareState.STREAMING
+        // CAL_DONE is immediately followed by READY; ignore intermediate.
+        else -> null
+    }
 }
 
 private data class ParsedSeqTimeUs(

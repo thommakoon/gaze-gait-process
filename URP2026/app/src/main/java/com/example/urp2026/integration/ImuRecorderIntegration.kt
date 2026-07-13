@@ -5,7 +5,11 @@ import android.os.Environment
 import com.example.urp2026.neon.NeonCompanionApi
 import com.example.urp2026.neon.NeonHttpResult
 import com.example.urp2026.neon.describe
+import com.example.urp2026.pcbridge.PcActionResult
+import com.example.urp2026.pcbridge.PcBridgeState
+import com.example.urp2026.pcbridge.PcCommandHttpServer
 import com.example.urp2026.qtpy.QtPyBridgeState
+import com.example.urp2026.qtpy.QtPyFirmwareState
 import com.example.urp2026.qtpy.QtPyLineRecord
 import com.example.urp2026.qtpy.QtPySerialBridge
 import kotlinx.coroutines.CoroutineScope
@@ -22,7 +26,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * High-level wiring (analogous to Termux `dual_imu_recorder_core.run_recorder` + entry script).
- * QT Py is stubbed; Neon REST is polished here before USB serial lands in [QtPySerialBridge].
+ * QT Py USB serial + Neon REST; optional LAN HTTP bridge for PC wireless CMD:* / record control.
  */
 class ImuRecorderIntegration(
     context: Context,
@@ -37,6 +41,16 @@ class ImuRecorderIntegration(
     private val activeRecordingId = AtomicReference<String?>(null)
     private val combinedSessionActive = AtomicBoolean(false)
     private val csvSessionInfo = AtomicReference<String?>(null)
+
+    private val pcBridge = PcCommandHttpServer(
+        onQtPyCommand = { cmd -> qtPy.writeCommand(cmd) },
+        qtPyConnected = { qtPy.isReady() },
+        qtPyFirmwareState = { qtPy.firmwareState().name },
+        qtPyStreaming = { qtPy.isStreaming() },
+        recordingActive = { combinedSessionActive.get() },
+        onRecordStart = { startBothForPc() },
+        onRecordStop = { stopBothForPc() },
+    )
 
     init {
         qtPy.setLineRecordListener { record ->
@@ -58,16 +72,27 @@ class ImuRecorderIntegration(
     }
 
     fun qtPyReady(): Boolean = qtPy.isReady()
+    fun qtPyIsStreaming(): Boolean = qtPy.isStreaming()
     fun qtPyStateFlow(): StateFlow<QtPyBridgeState> = qtPy.state
+    fun pcBridgeStateFlow(): StateFlow<PcBridgeState> = pcBridge.state
 
     suspend fun qtPyConnectResult(): String = qtPy.connect()
     suspend fun qtPyDisconnectResult(): String = qtPy.disconnect()
+    /** After USB permission dialog / resume: open if already permitted. Null = nothing to do. */
+    suspend fun qtPyTryConnectIfPermitted(): String? = qtPy.tryConnectIfPermitted()
+    suspend fun qtPySendCommand(command: String): String = qtPy.writeCommand(command)
     fun qtPyClearMonitor() = qtPy.clearRecentLines()
+
+    fun pcBridgeStart(): String = pcBridge.start()
+    fun pcBridgeStop(): String = pcBridge.stop()
+    fun pcBridgeRunning(): Boolean = pcBridge.isRunning()
+
     fun csvSessionInfo(): String? = csvSessionInfo.get()
     fun close() {
         combinedSessionActive.set(false)
         csvRecorder.close()
         qtPy.setLineRecordListener(null)
+        pcBridge.close()
         qtPy.close()
         eventScope.cancel()
     }
@@ -166,12 +191,17 @@ class ImuRecorderIntegration(
 
     /**
      * Recorder-aligned flow:
-     * 1) Require QT Py already connected over USB serial.
+     * 1) Require QT Py USB connected and firmware STATE:STREAMING.
      * 2) Start Neon recording + imu_stream_start marker.
      */
     suspend fun startBothIfQtPyConnected(): String {
         if (!qtPyReady()) {
             return "Connect QT Py first (USB serial) before starting both recordings."
+        }
+        val fw = qtPy.firmwareState()
+        if (!qtPy.isStreaming()) {
+            return "QT Py must be STREAMING before Start both " +
+                "(firmware=$fw). Calibrate then CMD Start (or button), then retry."
         }
         if (combinedSessionActive.get()) {
             return "Both recording session is already active."
@@ -186,6 +216,34 @@ class ImuRecorderIntegration(
         csvRecorder.close()
         csvSessionInfo.set(null)
         return result
+    }
+
+    /** Same checks as [startBothIfQtPyConnected]; structured for PC HTTP bridge. */
+    suspend fun startBothForPc(): PcActionResult {
+        val message = startBothIfQtPyConnected()
+        if (combinedSessionActive.get()) {
+            return PcActionResult(ok = true, message = message, httpStatus = 200)
+        }
+        val status = when {
+            !qtPyReady() -> 503
+            qtPy.firmwareState() != QtPyFirmwareState.STREAMING -> 409
+            message.contains("already active", ignoreCase = true) -> 409
+            else -> 502 // Neon / CSV start failed
+        }
+        return PcActionResult(ok = false, message = message, httpStatus = status)
+    }
+
+    /** Same as app Stop both; structured for PC HTTP bridge. */
+    suspend fun stopBothForPc(): PcActionResult {
+        if (!combinedSessionActive.get()) {
+            return PcActionResult(
+                ok = false,
+                message = "No active both-recording session to stop.",
+                httpStatus = 409,
+            )
+        }
+        val message = stopBothSession()
+        return PcActionResult(ok = true, message = message, httpStatus = 200)
     }
 
     /**

@@ -2,18 +2,24 @@
 """Build a shared 200 Hz UTC grid from 02_cleaned session files.
 
 Each stream is linearly interpolated onto the same ``t_utc_ns`` axis (5 ms step)
-over the overlap window [max(starts), min(ends)]. Values outside a stream's time
-support are NaN (``interp1d`` bounds); no extra gap masking.
+over the overlap window [max(starts), min(ends)] of foot + Neon. Optional Quest
+(``quest_100hz.csv``) is interpolated onto that same grid (NaN outside Quest
+support). Discrete Quest columns (step_num, neon_gaze_t_ns, …) are deferred to
+Phase 6 — not linearly interpolated.
 
 Outputs under <output-root>/<session_id>/:
     grid_200hz_meta.csv
     LF_imu_fused_*_200hz.csv, RF_imu_fused_*_200hz.csv
     head_200hz.csv, gaze_200hz.csv
+    quest_200hz.csv   (if quest_100hz.csv present or --quest-csv given)
 
 Usage (from scripts/01_clean/):
     cd scripts/01_clean && uv sync
     uv run python grid_utc_200hz.py \\
         --session-dir ../../data/02_cleaned/20260513_220325
+    uv run python grid_utc_200hz.py \\
+        --session-dir ../../data/02_cleaned/20260513_220325 \\
+        --quest-csv ../../data/00_raw/quest_pull_20260712/quest_100hz.csv
 """
 
 from __future__ import annotations
@@ -33,8 +39,11 @@ DT_NS = 1_000_000_000 // FS_HZ
 
 FOOT_TS = "t_utc_ns"
 NEON_TS = "timestamp [ns]"
+QUEST_TS = "t_utc_ns"
 GAZE_NAME = "gaze.csv"
 HEAD_NAME = "head.csv"
+QUEST_NAME = "quest_100hz.csv"
+QUEST_OUT = "quest_200hz.csv"
 
 FOOT_VALUE_COLS = [
     "Acc_X",
@@ -43,6 +52,29 @@ FOOT_VALUE_COLS = [
     "Gyr_X",
     "Gyr_Y",
     "Gyr_Z",
+]
+
+# Continuous Quest pose/cursor columns only (Phase 5).
+QUEST_VALUE_COLS = [
+    "head_origin_x",
+    "head_origin_y",
+    "head_origin_z",
+    "head_forward_x",
+    "head_forward_y",
+    "head_forward_z",
+    "head_rot_x",
+    "head_rot_y",
+    "head_rot_z",
+    "cursor_origin_x",
+    "cursor_origin_y",
+    "cursor_origin_z",
+    "cursor_dir_x",
+    "cursor_dir_y",
+    "cursor_dir_z",
+    "target_x",
+    "target_y",
+    "target_z",
+    "cursor_angular_distance",
 ]
 
 
@@ -54,6 +86,15 @@ def find_foot_csvs(session_dir: Path) -> tuple[Path, Path]:
             f"Expected one LF and one RF under {session_dir}, got LF={len(lf)} RF={len(rf)}"
         )
     return lf[0], rf[0]
+
+
+def resolve_quest_csv(session_dir: Path, quest_csv: Path | None) -> Path | None:
+    if quest_csv is not None:
+        if not quest_csv.is_file():
+            raise FileNotFoundError(f"Quest CSV not found: {quest_csv}")
+        return quest_csv
+    candidate = session_dir / QUEST_NAME
+    return candidate if candidate.is_file() else None
 
 
 def dedupe_time_sorted(t_ns: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -111,12 +152,35 @@ def build_grid(t_start: int, t_end: int) -> np.ndarray:
     return (t_start + np.arange(n, dtype=np.int64) * DT_NS).astype(np.int64)
 
 
-def run_session(session_dir: Path, *, output_root: Path) -> Path:
+def valid_frac(frame: pd.DataFrame, cols: list[str]) -> float:
+    if not cols:
+        return 0.0
+    use = [c for c in cols if c in frame.columns]
+    if not use:
+        return 0.0
+    m = frame[use].notna().all(axis=1)
+    return float(m.mean())
+
+
+def run_session(
+    session_dir: Path,
+    *,
+    output_root: Path,
+    quest_csv: Path | None = None,
+    require_quest: bool = False,
+) -> Path:
     lf_path, rf_path = find_foot_csvs(session_dir)
     head_path = session_dir / HEAD_NAME
     gaze_path = session_dir / GAZE_NAME
     if not head_path.is_file() or not gaze_path.is_file():
         raise FileNotFoundError(f"Need {HEAD_NAME} and {GAZE_NAME} in {session_dir}")
+
+    quest_path = resolve_quest_csv(session_dir, quest_csv)
+    if require_quest and quest_path is None:
+        raise FileNotFoundError(
+            f"Quest required but {QUEST_NAME} not found in {session_dir} "
+            f"(and --quest-csv not set)"
+        )
 
     starts, ends = [], []
     for p in (lf_path, rf_path, head_path, gaze_path):
@@ -156,44 +220,58 @@ def run_session(session_dir: Path, *, output_root: Path) -> Path:
     head_g.to_csv(out_dir / "head_200hz.csv", index=False)
     gaze_g.to_csv(out_dir / "gaze_200hz.csv", index=False)
 
-    def valid_frac(frame: pd.DataFrame, cols: list[str]) -> float:
-        if not cols:
-            return 0.0
-        use = [c for c in cols if c in frame.columns]
-        if not use:
-            return 0.0
-        m = frame[use].notna().all(axis=1)
-        return float(m.mean())
+    quest_g = None
+    quest_cols: list[str] = []
+    quest_src_rows = 0
+    if quest_path is not None:
+        quest = pd.read_csv(quest_path)
+        quest_src_rows = len(quest)
+        missing = [c for c in QUEST_VALUE_COLS if c not in quest.columns]
+        if missing:
+            raise ValueError(f"{quest_path.name}: missing columns {missing}")
+        quest_cols = list(QUEST_VALUE_COLS)
+        quest_g = interp_stream(quest, QUEST_TS, quest_cols, t_grid)
+        quest_g.to_csv(out_dir / QUEST_OUT, index=False)
 
-    meta = pd.DataFrame(
-        [
-            {
-                "fs_hz": FS_HZ,
-                "dt_ns": DT_NS,
-                "t_start_utc_ns": t_start,
-                "t_end_utc_ns": t_end,
-                "n_grid": n_grid,
-                "duration_s": duration_s,
-                "lf_valid_frac": valid_frac(lf_g, FOOT_VALUE_COLS),
-                "rf_valid_frac": valid_frac(rf_g, FOOT_VALUE_COLS),
-                "head_valid_frac": valid_frac(head_g, head_cols),
-                "gaze_valid_frac": valid_frac(gaze_g, gaze_cols),
-                "lf_src_rows": len(lf),
-                "rf_src_rows": len(rf),
-                "head_src_rows": len(head),
-                "gaze_src_rows": len(gaze),
-            }
-        ]
-    )
+    meta_row = {
+        "fs_hz": FS_HZ,
+        "dt_ns": DT_NS,
+        "t_start_utc_ns": t_start,
+        "t_end_utc_ns": t_end,
+        "n_grid": n_grid,
+        "duration_s": duration_s,
+        "lf_valid_frac": valid_frac(lf_g, FOOT_VALUE_COLS),
+        "rf_valid_frac": valid_frac(rf_g, FOOT_VALUE_COLS),
+        "head_valid_frac": valid_frac(head_g, head_cols),
+        "gaze_valid_frac": valid_frac(gaze_g, gaze_cols),
+        "quest_valid_frac": valid_frac(quest_g, quest_cols) if quest_g is not None else np.nan,
+        "lf_src_rows": len(lf),
+        "rf_src_rows": len(rf),
+        "head_src_rows": len(head),
+        "gaze_src_rows": len(gaze),
+        "quest_src_rows": quest_src_rows,
+        "quest_csv": str(quest_path) if quest_path is not None else "",
+    }
+    meta = pd.DataFrame([meta_row])
     meta_path = out_dir / "grid_200hz_meta.csv"
     meta.to_csv(meta_path, index=False)
 
-    print(f"Overlap UTC: {t_start} .. {t_end}  ({duration_s:.2f} s)")
+    print(f"Overlap UTC (foot+Neon): {t_start} .. {t_end}  ({duration_s:.2f} s)")
     print(f"Grid: {n_grid} samples @ {FS_HZ} Hz (dt={DT_NS/1e6:.3f} ms)")
-    print(f"Valid fraction (all channels): LF {meta.lf_valid_frac.iloc[0]:.3f}  "
-          f"RF {meta.rf_valid_frac.iloc[0]:.3f}  "
-          f"head {meta.head_valid_frac.iloc[0]:.3f}  "
-          f"gaze {meta.gaze_valid_frac.iloc[0]:.3f}")
+    q_frac = meta.quest_valid_frac.iloc[0]
+    q_str = f"{q_frac:.3f}" if pd.notna(q_frac) else "n/a"
+    print(
+        f"Valid fraction: LF {meta.lf_valid_frac.iloc[0]:.3f}  "
+        f"RF {meta.rf_valid_frac.iloc[0]:.3f}  "
+        f"head {meta.head_valid_frac.iloc[0]:.3f}  "
+        f"gaze {meta.gaze_valid_frac.iloc[0]:.3f}  "
+        f"quest {q_str}"
+    )
+    if quest_path is not None and (pd.isna(q_frac) or q_frac == 0.0):
+        print(
+            "Note: quest_valid_frac=0 - Quest t_utc_ns does not overlap foot+Neon "
+            "(expected if sync.json / trial are from a different session)."
+        )
     print(f"Wrote {out_dir}")
     return out_dir
 
@@ -206,10 +284,26 @@ def main() -> None:
         type=Path,
         default=GRID_200HZ,
     )
+    parser.add_argument(
+        "--quest-csv",
+        type=Path,
+        default=None,
+        help=f"Optional path to {QUEST_NAME} (default: <session-dir>/{QUEST_NAME})",
+    )
+    parser.add_argument(
+        "--require-quest",
+        action="store_true",
+        help="Fail if Quest CSV is missing",
+    )
     args = parser.parse_args()
 
     try:
-        run_session(args.session_dir, output_root=args.output_root)
+        run_session(
+            args.session_dir,
+            output_root=args.output_root,
+            quest_csv=args.quest_csv,
+            require_quest=args.require_quest,
+        )
     except (ValueError, FileNotFoundError) as e:
         print(e, file=sys.stderr)
         sys.exit(1)

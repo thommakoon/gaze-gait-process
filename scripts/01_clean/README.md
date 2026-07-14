@@ -104,6 +104,22 @@ uv run python plot_movement_psd.py --session-dir ../../data/03_grid_200hz/<sessi
 uv run python plot_gaze_head_psd.py --session-dir ../../data/03_grid_200hz/<session>
 ```
 
+## Quest / Neon clock sync (PC hub)
+
+Preferred: Neon-style **time-echo** (not one-way pulses).
+
+1. OpenEye GUI → TCP connected → **Start Quest↔PC time-echo** (period 1 s).
+2. Writes `external/OpenEye/tXX/sync.json` with `offset_quest_to_pc_ns`.
+3. If Neon connected, also fills `offset_phone_to_pc_ns` (feet follow phone).
+
+```bash
+uv run python convert_quest_to_pc_ns.py \
+  --sync ../../external/OpenEye/t00/sync.json \
+  trial.json -o ../../data/02_cleaned/<session>/quest_pc.csv
+```
+
+Legacy: `compute_sync_json.py` from old `sync_pulses.jsonl` still works.
+
 ## One-liner flow
 
 ```bash

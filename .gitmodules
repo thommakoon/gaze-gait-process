@@ -10,3 +10,6 @@
 [submodule "QuestApp-PracticeTask"]
 	path = QuestApp-PracticeTask
 	url = https://github.com/thommakoon/QuestApp-PracticeTask.git
+[submodule "QuestApp-MainStudy"]
+	path = QuestApp-MainStudy
+	url = https://github.com/thommakoon/QuestApp-MainStudy.git

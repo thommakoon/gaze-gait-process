@@ -8,7 +8,7 @@
 #   .\quest_adb.ps1 switch calib|practice|main|main-pro   # force-stop all study pkgs, then launch
 
 # ---------- CONFIG (edit these) ----------
-$Adb = "adb"
+$Adb = "adb"               # or full path to adb.exe if it is not on PATH
 $QuestIp = "192.168.x.x"   # Quest Wi-Fi IP
 $AdbPort = 5555
 

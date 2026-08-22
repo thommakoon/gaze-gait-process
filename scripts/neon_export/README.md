@@ -29,8 +29,8 @@ python scripts\neon_export\match_neon_imu.py --participants 82
 python scripts\neon_export\match_neon_imu.py --participants 82 --dry-run
 # optional roots:
 python scripts\neon_export\match_neon_imu.py --participants 82 `
-  --neon-root "C:\Users\USER\Documents\Neon Export" `
-  --imu-root "C:\Users\USER\Documents\URP2026_imu_sessions"
+  --neon-root "$env:USERPROFILE\Documents\Neon Export" `
+  --imu-root "$env:USERPROFILE\Documents\URP2026_imu_sessions"
 ```
 
 Writes `data/participants/participant82/match_neon_imu.csv`. Review/edit rows before copy. Historical p80/p81 one-offs under `data/participants/_match_neon_imu_80_81*` are archives only.

@@ -2,7 +2,7 @@
 name = "gazegait-02-analysis"
 version = "0.1.0"
 description = "gazeGait 02_analysis — run external imu_gait_analysis on 05_gait_xsens bundles."
-requires-python = ">=3.9,<3.12"
+requires-python = ">=3.9,<3.13"
 
 dependencies = [
     "numpy>=1.21,<2",

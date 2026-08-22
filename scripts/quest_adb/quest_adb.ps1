@@ -3,9 +3,9 @@
 #   .\quest_adb.ps1 usb-wifi          # USB plugged: enable tcpip 5555
 #   .\quest_adb.ps1 connect           # adb connect QUEST_IP:5555
 #   .\quest_adb.ps1 devices
-#   .\quest_adb.ps1 calib | practice | main
-#   .\quest_adb.ps1 quit-calib | quit-practice | quit-main | quit-all
-#   .\quest_adb.ps1 switch calib|practice|main   # force-stop all study pkgs, then launch
+#   .\quest_adb.ps1 calib | practice | main | main-pro
+#   .\quest_adb.ps1 quit-calib | quit-practice | quit-main | quit-main-pro | quit-all
+#   .\quest_adb.ps1 switch calib|practice|main|main-pro   # force-stop all study pkgs, then launch
 
 # ---------- CONFIG (edit these) ----------
 $Adb = "adb"
@@ -14,7 +14,8 @@ $AdbPort = 5555
 
 $PkgCalib = "org.MixedRealityToolkit.MRTK3Sample"
 $PkgPractice = "com.PracticeMG.MRstressPRACTICE"
-$PkgMain = "com.PracticeMG.MRstress"
+$PkgMain = "com.PracticeMG.MRstress"           # Quest 3 + OpenEye
+$PkgMainPro = "com.PracticeMG.MRstressPro"     # Quest Pro + OVR eye tracking
 # ----------------------------------------
 
 $ErrorActionPreference = "Stop"
@@ -40,13 +41,13 @@ Setup (USB once per reboot if needed):
   disconnect   adb disconnect ${QuestIp}:$AdbPort
 
 Launch:
-  calib | practice | main
+  calib | practice | main | main-pro
 
 Quit:
-  quit-calib | quit-practice | quit-main | quit-all
+  quit-calib | quit-practice | quit-main | quit-main-pro | quit-all
 
-Switch (quit all three, then launch one):
-  switch calib|practice|main
+Switch (quit all study pkgs, then launch one):
+  switch calib|practice|main|main-pro
 "@
 }
 
@@ -76,6 +77,7 @@ function Quit-All {
     Quit-Pkg $PkgCalib
     Quit-Pkg $PkgPractice
     Quit-Pkg $PkgMain
+    Quit-Pkg $PkgMainPro
 }
 
 function Switch-To([string]$Target) {
@@ -85,7 +87,8 @@ function Switch-To([string]$Target) {
         "calib" { Launch-Pkg $PkgCalib }
         "practice" { Launch-Pkg $PkgPractice }
         "main" { Launch-Pkg $PkgMain }
-        default { throw "switch target must be calib|practice|main (got '$Target')" }
+        "main-pro" { Launch-Pkg $PkgMainPro }
+        default { throw "switch target must be calib|practice|main|main-pro (got '$Target')" }
     }
 }
 
@@ -106,14 +109,16 @@ switch ($cmd) {
     "calib" { Launch-Pkg $PkgCalib }
     "practice" { Launch-Pkg $PkgPractice }
     "main" { Launch-Pkg $PkgMain }
+    "main-pro" { Launch-Pkg $PkgMainPro }
 
     "quit-calib" { Quit-Pkg $PkgCalib }
     "quit-practice" { Quit-Pkg $PkgPractice }
     "quit-main" { Quit-Pkg $PkgMain }
+    "quit-main-pro" { Quit-Pkg $PkgMainPro }
     "quit-all" { Quit-All }
 
     "switch" {
-        if (-not $arg1) { throw "usage: .\quest_adb.ps1 switch calib|practice|main" }
+        if (-not $arg1) { throw "usage: .\quest_adb.ps1 switch calib|practice|main|main-pro" }
         Switch-To $arg1
     }
 

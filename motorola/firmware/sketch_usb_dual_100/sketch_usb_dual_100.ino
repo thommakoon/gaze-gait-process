@@ -24,19 +24,35 @@
 #define BTN_PIN            A0
 #define DEBOUNCE_MS        50
 #define CAL_SAMPLES        500
-#define LF_MUX_PORT        0
-#define RF_MUX_PORT        1
+#define LF_MUX_PORT        3
+#define RF_MUX_PORT        2
+#define I2C_CLOCK_HZ       100000UL
 
 // 100 Hz (10000 us per sample).
 #define SAMPLE_PERIOD_US   10000UL
 #define TIMER_TICK_HZ      1000000UL
 
+// Adafruit begin_I2C() fails if magnetometer setup fails; we stream accel+gyro only.
+class Adafruit_ICM20948_AgGyroOnly : public Adafruit_ICM20948 {
+public:
+  bool begin_I2C_AgGyroOnly(uint8_t i2c_address, TwoWire* wire, int32_t sensor_id = 0) {
+    if (i2c_dev) {
+      delete i2c_dev;
+    }
+    i2c_dev = new Adafruit_I2CDevice(i2c_address, wire);
+    if (!i2c_dev->begin()) {
+      return false;
+    }
+    return _init(sensor_id);
+  }
+};
+
 enum State { WAITING, CALIBRATING, READY, STREAMING };
 State state = WAITING;
 
 QWIICMUX myMux;
-Adafruit_ICM20948 icm1;
-Adafruit_ICM20948 icm2;
+Adafruit_ICM20948_AgGyroOnly icm1;
+Adafruit_ICM20948_AgGyroOnly icm2;
 
 float bias1Ax = 0, bias1Ay = 0, bias1Az = 0;
 float bias1Gx = 0, bias1Gy = 0, bias1Gz = 0;
@@ -73,6 +89,20 @@ void IRAM_ATTR onSampleTimer() {
 
 void sendLine(const char* line) {
   Serial.println(line);
+  Serial.flush();
+}
+
+void waitForUsbSerial() {
+  unsigned long t0 = millis();
+  while (!Serial && (millis() - t0) < 5000) {
+    delay(10);
+  }
+}
+
+// Hot-path mux switch: no ms delays. Old delay(2)+delay(10) ran twice per
+// sample (LF+RF) and capped streaming at ~33 Hz instead of 100 Hz.
+void selectMuxPort(uint8_t port) {
+  myMux.setPort(port);
 }
 
 bool buttonJustPressed() {
@@ -174,9 +204,9 @@ bool consumeImuSample(uint32_t& tUsOut,
   interrupts();
 
   sensors_event_t tEvt, mEvt;
-  myMux.setPort(LF_MUX_PORT);
+  selectMuxPort(LF_MUX_PORT);
   icm1.getEvent(&a1, &g1, &tEvt, &mEvt);
-  myMux.setPort(RF_MUX_PORT);
+  selectMuxPort(RF_MUX_PORT);
   icm2.getEvent(&a2, &g2, &tEvt, &mEvt);
 
   tUsOut = tUs;
@@ -185,17 +215,20 @@ bool consumeImuSample(uint32_t& tUsOut,
 
 void setup() {
   Serial.begin(230400);
-  delay(50);
+  waitForUsbSerial();
+  Serial.println();
+  Serial.println("BOOT sketch_usb_dual_100");
+  Serial.flush();
 
   pinMode(BTN_PIN, INPUT_PULLUP);
 
   Wire1.begin();
-  Wire1.setClock(400000);
+  Wire1.setClock(I2C_CLOCK_HZ);
 
   Serial.print("Dual IMU USB (sketch_usb_dual_100) - ICM-20948, hw-timer ");
   Serial.print(1000000UL / SAMPLE_PERIOD_US);
   Serial.println(" Hz, no mag");
-  Serial.println("  LF = mux port 0, RF = mux port 1");
+  Serial.println("  LF = mux port 3, RF = mux port 2");
 
   if (!myMux.begin(0x70, Wire1)) {
     Serial.println("Mux not detected. Freezing...");
@@ -203,21 +236,21 @@ void setup() {
   }
   Serial.println("Mux detected");
 
-  myMux.setPort(LF_MUX_PORT);
-  if (!icm1.begin_I2C(IMU_I2C_ADDR, &Wire1)) {
-    Serial.println("Failed to find ICM20948 on port 0 (LF)");
+  selectMuxPort(LF_MUX_PORT);
+  if (!icm1.begin_I2C_AgGyroOnly(IMU_I2C_ADDR, &Wire1)) {
+    Serial.println("Failed to find ICM20948 on port 3 (LF)");
     while (1) delay(10);
   }
   configureICM(icm1);
-  Serial.println("Port 0 ICM20948 (LF) initialized");
+  Serial.println("Port 3 ICM20948 (LF) initialized");
 
-  myMux.setPort(RF_MUX_PORT);
-  if (!icm2.begin_I2C(IMU_I2C_ADDR, &Wire1)) {
-    Serial.println("Failed to find ICM20948 on port 1 (RF)");
+  selectMuxPort(RF_MUX_PORT);
+  if (!icm2.begin_I2C_AgGyroOnly(IMU_I2C_ADDR, &Wire1)) {
+    Serial.println("Failed to find ICM20948 on port 2 (RF)");
     while (1) delay(10);
   }
   configureICM(icm2);
-  Serial.println("Port 1 ICM20948 (RF) initialized");
+  Serial.println("Port 2 ICM20948 (RF) initialized");
 
   sampleTimer = timerBegin(TIMER_TICK_HZ);
   if (sampleTimer == nullptr) {
@@ -229,6 +262,9 @@ void setup() {
 
   Serial.println();
   enterWaiting();
+  Serial.println("Press button on A0: 1x=calibrate, 2x=stream, 3x=stop");
+  Serial.println("(No CSV until calibrating/streaming — unlike dual_plain)");
+  Serial.flush();
 }
 
 void loop() {

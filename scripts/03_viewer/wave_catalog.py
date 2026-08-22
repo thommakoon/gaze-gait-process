@@ -1,4 +1,4 @@
-"""Waveform series for the session wave viewer."""
+"""Waveform series for the session wave viewer (legacy + bout layouts)."""
 from __future__ import annotations
 
 import csv
@@ -6,20 +6,12 @@ import json
 import math
 from pathlib import Path
 
-from _paths import GAIT_RESULT, GAIT_XSENS
-from gait_catalog import resolve_gait_target
+from sessions import SessionRef
 
 HEAD_MADGWICK = "head_madgwick_200hz.csv"
 GAZE_GRID = "gaze_200hz.csv"
 GRID_META = "grid_200hz_meta.csv"
-IC_MANUAL = GAIT_RESULT / "interim" / "imu_initial_contact_manual.csv"
 FS_HZ = 200
-
-
-def _trajectory_path(subject: str, run: str, side: str) -> str:
-    return str(
-        GAIT_RESULT / "interim" / subject / run / f"_trajectory_estimation_{side}.json"
-    )
 
 
 def _float_or_none(raw: str) -> float | None:
@@ -31,8 +23,8 @@ def _float_or_none(raw: str) -> float | None:
     return value
 
 
-def _read_grid_t_start_ns(session_id: str) -> int | None:
-    meta_path = GAIT_XSENS / session_id / GRID_META
+def _read_grid_t_start_ns(xsens_dir: Path) -> int | None:
+    meta_path = xsens_dir / GRID_META
     if not meta_path.is_file():
         return None
     with meta_path.open(encoding="utf-8", newline="") as f:
@@ -65,8 +57,8 @@ def _series(
     }
 
 
-def _load_trajectory_position_z(subject: str, run: str, side: str) -> dict | None:
-    path = GAIT_RESULT / "interim" / subject / run / f"_trajectory_estimation_{side}.json"
+def _load_trajectory_position_z(gait_result: Path, subject: str, run: str, side: str) -> dict | None:
+    path = gait_result / "interim" / subject / run / f"_trajectory_estimation_{side}.json"
     if not path.is_file():
         return None
 
@@ -88,45 +80,8 @@ def _load_trajectory_position_z(subject: str, run: str, side: str) -> dict | Non
         description=f"Estimated vertical foot position ({side}, imu_gait_analysis)",
         times_s=[float(data["time"][k]) for k in keys],
         values=[float(data["position_z"][k]) for k in keys],
-        source=_trajectory_path(subject, run, side),
+        source=str(path),
     )
-
-
-def _load_bundle_columns(
-    session_id: str,
-    filename: str,
-    columns: list[tuple[str, str, str, str]],
-    *,
-    t_start_ns: int,
-) -> list[dict]:
-    path = GAIT_XSENS / session_id / filename
-    if not path.is_file():
-        return []
-
-    with path.open(encoding="utf-8", newline="") as f:
-        rows = list(csv.DictReader(f))
-
-    if not rows or "t_utc_ns" not in rows[0]:
-        return []
-
-    times_s = [(int(float(row["t_utc_ns"])) - t_start_ns) / 1e9 for row in rows]
-    out: list[dict] = []
-    for signal_id, label, col, unit in columns:
-        if col not in rows[0]:
-            continue
-        values = [_float_or_none(row.get(col, "")) for row in rows]
-        out.append(
-            _series(
-                signal_id=signal_id,
-                label=label,
-                unit=unit,
-                description=f"{filename} → {col}",
-                times_s=times_s,
-                values=values,
-                source=str(path),
-            )
-        )
-    return out
 
 
 def _interpolate_gaps(values: list[float | None]) -> list[float]:
@@ -228,7 +183,6 @@ _GAZE_MEAN_CENTERED = (
     ("gaze_elevation", "elevation − mean", "elevation [deg]", "deg"),
 )
 
-
 _HEAD_ANGLE_COLS = (
     ("head_roll", "head roll", "madgwick roll [deg]"),
     ("head_pitch", "head pitch", "madgwick pitch [deg]"),
@@ -247,8 +201,8 @@ _GAZE_RATE_COLS = (
 )
 
 
-def _load_head_signals(session_id: str, *, t_start_ns: int) -> list[dict]:
-    path = GAIT_XSENS / session_id / HEAD_MADGWICK
+def _load_head_signals(xsens_dir: Path, *, t_start_ns: int) -> list[dict]:
+    path = xsens_dir / HEAD_MADGWICK
     if not path.is_file():
         return []
 
@@ -298,9 +252,9 @@ def _load_head_signals(session_id: str, *, t_start_ns: int) -> list[dict]:
     return out
 
 
-def _load_gaze_signals(session_id: str, *, t_start_ns: int) -> list[dict]:
-    """Mean-centered gaze angles plus az/el angular rates."""
-    path = GAIT_XSENS / session_id / GAZE_GRID
+def _load_gaze_signals(xsens_dir: Path, *, t_start_ns: int) -> list[dict]:
+    """Mean-centered gaze angles plus az/el angular rates + gaze speed."""
+    path = xsens_dir / GAZE_GRID
     if not path.is_file():
         return []
 
@@ -377,10 +331,11 @@ def _is_outlier_row(row: dict) -> bool:
     return str(row.get("is_outlier", "")).lower() in ("true", "1", "yes")
 
 
-def _load_manual_initial_ic(subject: str, run: str) -> dict[str, float]:
-    if not IC_MANUAL.is_file():
+def _load_manual_initial_ic(gait_result: Path, subject: str, run: str) -> dict[str, float]:
+    ic_manual = gait_result / "interim" / "imu_initial_contact_manual.csv"
+    if not ic_manual.is_file():
         return {}
-    with IC_MANUAL.open(encoding="utf-8", newline="") as f:
+    with ic_manual.open(encoding="utf-8", newline="") as f:
         for row in csv.DictReader(f):
             if row.get("subject") != subject or row.get("run") != run:
                 continue
@@ -393,7 +348,7 @@ def _load_manual_initial_ic(subject: str, run: str) -> dict[str, float]:
     return {}
 
 
-def _load_foot_gait_markers(subject: str, run: str, side: str) -> list[dict]:
+def _load_foot_gait_markers(gait_result: Path, subject: str, run: str, side: str) -> list[dict]:
     foot = "left" if side == "left" else "right"
     foot_id = "lf" if side == "left" else "rf"
     markers: list[dict] = []
@@ -413,11 +368,11 @@ def _load_foot_gait_markers(subject: str, run: str, side: str) -> list[dict]:
             }
         )
 
-    initial = _load_manual_initial_ic(subject, run)
+    initial = _load_manual_initial_ic(gait_result, subject, run)
     if side in initial:
         add(initial[side], "IC")
 
-    params_path = GAIT_RESULT / "processed" / subject / run / f"{foot}_foot_core_params.csv"
+    params_path = gait_result / "processed" / subject / run / f"{foot}_foot_core_params.csv"
     if not params_path.is_file():
         return markers
 
@@ -435,41 +390,37 @@ def _load_foot_gait_markers(subject: str, run: str, side: str) -> list[dict]:
     return markers
 
 
-def load_gait_markers(session_id: str) -> list[dict]:
+def load_gait_markers(ref: SessionRef) -> list[dict]:
     """IC and toe-off (TO) event times aligned with trajectory/grid time (seconds)."""
-    target = resolve_gait_target(session_id)
-    if target is None:
+    if not ref.subject or not ref.run:
         return []
-
     markers: list[dict] = []
     for side in ("left", "right"):
-        markers.extend(_load_foot_gait_markers(target["subject"], target["run"], side))
+        markers.extend(_load_foot_gait_markers(ref.gait_result, ref.subject, ref.run, side))
     markers.sort(key=lambda m: (m["time_s"], m["foot"], m["event"]))
     return markers
 
 
-def load_lf_position_z_series(session_id: str) -> dict | None:
+def load_lf_position_z_series(ref: SessionRef) -> dict | None:
     """LF foot height (position_z) at 200 Hz from trajectory estimation."""
-    target = resolve_gait_target(session_id)
-    if target is None:
+    if not ref.subject or not ref.run:
         return None
-    series = _load_trajectory_position_z(target["subject"], target["run"], "left")
+    series = _load_trajectory_position_z(ref.gait_result, ref.subject, ref.run, "left")
     if series is None:
         return None
-    series["gait_subject"] = target["subject"]
-    series["gait_run"] = target["run"]
+    series["gait_subject"] = ref.subject
+    series["gait_run"] = ref.run
     return series
 
 
-def load_session_waves(session_id: str) -> dict:
-    """Load all wave-viewer signals for a session."""
+def load_session_waves(ref: SessionRef) -> dict:
+    """Load all wave-viewer signals for a resolved session."""
     signals: list[dict] = []
     missing: list[str] = []
 
-    target = resolve_gait_target(session_id)
-    if target is not None:
+    if ref.subject and ref.run:
         for side in ("left", "right"):
-            series = _load_trajectory_position_z(target["subject"], target["run"], side)
+            series = _load_trajectory_position_z(ref.gait_result, ref.subject, ref.run, side)
             if series is None:
                 missing.append(f"{side} trajectory position_z")
             else:
@@ -477,24 +428,24 @@ def load_session_waves(session_id: str) -> dict:
     else:
         missing.append("gait run mapping")
 
-    t_start_ns = _read_grid_t_start_ns(session_id)
+    t_start_ns = _read_grid_t_start_ns(ref.xsens_dir)
     if t_start_ns is None:
         missing.append(GRID_META)
     else:
-        head_signals = _load_head_signals(session_id, t_start_ns=t_start_ns)
+        head_signals = _load_head_signals(ref.xsens_dir, t_start_ns=t_start_ns)
         if not head_signals:
             missing.append(HEAD_MADGWICK)
         signals.extend(head_signals)
 
-        gaze_signals = _load_gaze_signals(session_id, t_start_ns=t_start_ns)
+        gaze_signals = _load_gaze_signals(ref.xsens_dir, t_start_ns=t_start_ns)
         if not gaze_signals:
             missing.append(GAZE_GRID)
         signals.extend(gaze_signals)
 
-    markers = load_gait_markers(session_id) if target is not None else []
+    markers = load_gait_markers(ref) if (ref.subject and ref.run) else []
 
     return {
-        "session_id": session_id,
+        "session_id": ref.session_id,
         "signal_count": len(signals),
         "signals": signals,
         "markers": markers,

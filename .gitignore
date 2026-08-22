@@ -4,9 +4,13 @@
 
 # ---- Recorded data (NEVER commit) -------------------------------------------
 data/
+t00/
 StrokeGait/
 **/recordings/
-**/*_export/
+data/**/*_export/
+instruction.docx
+*.pdf
+*.zip
 
 # Common binary recording artifacts (Neon, Xsens, etc.)
 *.mp4
@@ -128,4 +132,12 @@ migrate_submodule_chats.py
 
 # ---- External ----------------------------------------------------------------
 external/OpenEye-tmp/
+external/MRTK3-src/
 QuestApp/
+
+# ---- Android Studio / viewer runtime ----------------------------------------
+URP2026/.idea/
+scripts/03_viewer/server.err.log
+scripts/03_viewer/server.out.log
+scripts/03_viewer/server.pid
+**/*.f3d

@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Local web viewer for ``05_gait_xsens`` bundles and gait analysis results.
+"""Local web viewer for gait bundles + gait analysis (legacy + bout layouts).
+
+Discovers both the legacy flat layout (``data/05_gait_xsens/<session>/``) and the
+per-participant bout layout (``data/participants/participant<N>/<Speed>/<Interaction>/``).
 
 Usage (from scripts/03_viewer/):
     uv sync
@@ -18,16 +21,27 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from _paths import GAIT_RESULT, GAIT_XSENS
+from _paths import GAIT_RESULT, GAIT_XSENS, PARTICIPANTS
 from catalog import build_session_detail, list_sessions
 from gait_catalog import safe_gait_path
 from saccade_catalog import analyze_session_saccade_fourier, analyze_session_saccades
+from sessions import SessionRef, resolve
 from wave_catalog import load_lf_position_z_series, load_session_waves
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
-app = FastAPI(title="gazeGait data viewer", version="0.2.0")
+app = FastAPI(title="gazeGait data viewer", version="0.3.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+def _resolve_or_404(session_id: str) -> SessionRef:
+    if not SESSION_ID_RE.match(session_id):
+        raise HTTPException(status_code=400, detail="Invalid session id")
+    ref = resolve(session_id)
+    if ref is None or not ref.xsens_dir.is_dir():
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    return ref
 
 
 @app.get("/")
@@ -36,10 +50,7 @@ def index() -> FileResponse:
 
 
 def _session_viewer_page(session_id: str) -> FileResponse:
-    if not SESSION_ID_RE.match(session_id):
-        raise HTTPException(status_code=400, detail="Invalid session id")
-    if not (GAIT_XSENS / session_id).is_dir():
-        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    _resolve_or_404(session_id)
     return FileResponse(STATIC_DIR / "waves.html")
 
 
@@ -60,6 +71,7 @@ def api_sessions() -> dict:
 
 @app.get("/api/sessions/{session_id}")
 def api_session_detail(session_id: str) -> dict:
+    _resolve_or_404(session_id)
     detail = build_session_detail(session_id)
     if detail is None:
         raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
@@ -68,17 +80,15 @@ def api_session_detail(session_id: str) -> dict:
 
 @app.get("/api/sessions/{session_id}/files/{filename}")
 def api_session_file(session_id: str, filename: str) -> FileResponse:
-    path = _safe_session_file(session_id, filename)
+    ref = _resolve_or_404(session_id)
+    path = _safe_session_file(ref, filename)
     return FileResponse(path, filename=filename, media_type=_media_type(path))
 
 
 @app.get("/api/sessions/{session_id}/waves")
 def api_session_waves(session_id: str) -> dict:
-    if not SESSION_ID_RE.match(session_id):
-        raise HTTPException(status_code=400, detail="Invalid session id")
-    if not (GAIT_XSENS / session_id).is_dir():
-        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
-    bundle = load_session_waves(session_id)
+    ref = _resolve_or_404(session_id)
+    bundle = load_session_waves(ref)
     if bundle["signal_count"] == 0:
         raise HTTPException(
             status_code=404,
@@ -89,11 +99,8 @@ def api_session_waves(session_id: str) -> dict:
 
 @app.get("/api/sessions/{session_id}/waves/lf_position_z")
 def api_lf_position_z_wave(session_id: str) -> dict:
-    if not SESSION_ID_RE.match(session_id):
-        raise HTTPException(status_code=400, detail="Invalid session id")
-    if not (GAIT_XSENS / session_id).is_dir():
-        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
-    series = load_lf_position_z_series(session_id)
+    ref = _resolve_or_404(session_id)
+    series = load_lf_position_z_series(ref)
     if series is None:
         raise HTTPException(
             status_code=404,
@@ -109,10 +116,7 @@ def api_saccades_analyze(
     min_duration_ms: float = 20.0,
     bin_width: float = 10.0,
 ) -> dict:
-    if not SESSION_ID_RE.match(session_id):
-        raise HTTPException(status_code=400, detail="Invalid session id")
-    if not (GAIT_XSENS / session_id).is_dir():
-        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    ref = _resolve_or_404(session_id)
     if threshold is not None and threshold < 0:
         raise HTTPException(status_code=400, detail="threshold must be >= 0")
     if min_duration_ms < 0:
@@ -121,7 +125,7 @@ def api_saccades_analyze(
         raise HTTPException(status_code=400, detail="bin_width must be in (0, 100]")
     try:
         return analyze_session_saccades(
-            session_id,
+            ref,
             threshold_px_s=threshold,
             min_duration_ms=min_duration_ms,
             bin_width=bin_width,
@@ -144,10 +148,7 @@ def api_saccades_fourier(
     f_max: float = 10.0,
     f_step: float = 0.2,
 ) -> dict:
-    if not SESSION_ID_RE.match(session_id):
-        raise HTTPException(status_code=400, detail="Invalid session id")
-    if not (GAIT_XSENS / session_id).is_dir():
-        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    ref = _resolve_or_404(session_id)
     if threshold is not None and threshold < 0:
         raise HTTPException(status_code=400, detail="threshold must be >= 0")
     if min_duration_ms < 0:
@@ -160,7 +161,7 @@ def api_saccades_fourier(
         raise HTTPException(status_code=400, detail="f_step must be > 0")
     try:
         return analyze_session_saccade_fourier(
-            session_id,
+            ref,
             threshold_px_s=threshold,
             min_duration_ms=min_duration_ms,
             bin_width_pct=bin_width,
@@ -187,16 +188,11 @@ def api_gait_file(rel_path: str) -> FileResponse:
     return FileResponse(path, filename=path.name, media_type=_media_type(path))
 
 
-def _safe_session_file(session_id: str, filename: str) -> Path:
-    if not SESSION_ID_RE.match(session_id):
-        raise HTTPException(status_code=400, detail="Invalid session id")
+def _safe_session_file(ref: SessionRef, filename: str) -> Path:
     if Path(filename).name != filename or not filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
 
-    session_dir = (GAIT_XSENS / session_id).resolve()
-    if not session_dir.is_dir():
-        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
-
+    session_dir = ref.xsens_dir.resolve()
     path = (session_dir / filename).resolve()
     try:
         path.relative_to(session_dir)
@@ -206,8 +202,6 @@ def _safe_session_file(session_id: str, filename: str) -> Path:
         raise HTTPException(status_code=404, detail=f"File not found: {filename}")
     return path
 
-
-SESSION_ID_RE = re.compile(r"^\d{8}_\d{6}$")
 
 _MEDIA_TYPES = {
     ".csv": "text/csv",
@@ -233,8 +227,9 @@ def main() -> None:
     args = parser.parse_args()
 
     url = f"http://{args.host}:{args.port}/"
-    print(f"Sessions: {GAIT_XSENS.resolve()}")
-    print(f"Gait results: {GAIT_RESULT.resolve()}")
+    print(f"Legacy sessions: {GAIT_XSENS.resolve()}")
+    print(f"Bout sessions:   {PARTICIPANTS.resolve()}")
+    print(f"Gait results:    {GAIT_RESULT.resolve()}")
     print(f"Open {url}")
 
     if args.open:

@@ -5,135 +5,118 @@ Run all commands from `scripts/01_clean/`:
 ```bash
 cd scripts/01_clean
 uv sync
-uv run python <script>.py ...
+uv run python <step-folder>/<script>.py ...
 ```
 
-Replace `<session>` with e.g. `20260606_135203`.
+Scripts are grouped by pipeline order (`01_0N_*`). Shared helpers stay at the
+root (`_paths.py`, `_bootstrap.py`, `run_pipeline.py`).
 
-## Data layout (repo root)
-
-Folders are numbered in pipeline order:
-
-```
-data/
-├── 00_raw/<session>/              # recordings (LF/RF CSV + Neon folder)
-├── 01_corrected/<session>/        # step 1 — Hampel UTC fix
-├── 02_cleaned/<session>/        # step 2 — drop bad spacing
-├── 03_grid_200hz/<session>/       # step 3 — shared 200 Hz grid
-├── 04_grid_200hz_filled/          # step 4 (optional) — fill NaNs
-└── 05_gait_xsens/<session>/       # step 5 — gait analysis bundle
+```text
+scripts/01_clean/
+  _paths.py / _bootstrap.py / run_pipeline.py
+  01_00_sync/           # PC clock offsets (sync.json)
+  01_01_export/         # Neon raw → csv, Quest JSON → quest_100hz.csv
+  01_02_correct_utc/    # Hampel fix foot receive timestamps
+  01_03_drop_dt/        # drop bad IMU spacing
+  01_04_grid_200hz/     # shared 200 Hz grid (+ optional NaN fill)
+  01_05_gait_xsens/     # Xsens LF/RF bundle + Madgwick head
 ```
 
-## Raw inputs
+Each entry script bootstraps `sys.path` via `_bootstrap.py`.
 
-`data/00_raw/<session>/`
+---
 
-- `LF_imu_fused_*.csv`, `RF_imu_fused_*.csv` — foot IMU (~100 Hz)
-- `<timestamp>/` or `<timestamp>_export/` — Neon `gaze.csv`, `imu.csv`
+## Data layout (locked)
+
+Each recording **bout** is `participant<N>/<Bout>/<Interaction>/`:
+
+```
+data/participants/participant0/
+├── models/                       # shared OpenEye calib (once per person)
+├── Ring/  Rectangle/  PracticeRing/  PracticeRectangle/
+│   └── HeadPinch | HandPinch | EyePinch/
+│       ├── 00_raw/{Motorola,Quest,OpenEye}/
+│       ├── 01_corrected/
+│       ├── 02_cleaned/
+│       ├── 03_grid_200hz/
+│       ├── 04_grid_200hz_filled/
+│       ├── 05_gait_xsens/
+│       └── 06_gait_analysis/
+```
+
+`Bout` ∈ `Ring | Rectangle | PracticeRing | PracticeRectangle`.  
+`Interaction` ∈ `HeadPinch | HandPinch | EyePinch`.
+
+`--bout` selects the bout folder (`--speed` is the same flag).
+
+If a **Ring** / **Rectangle** bout has no OpenEye calib, it reused the matching
+**PracticeRing** / **PracticeRectangle** bout (same interaction). After all 12
+recordings:
+
+```bash
+uv run python link_practice_openeye_calib.py --participant 21 --dry-run
+uv run python link_practice_openeye_calib.py --participant 21
+```
+
+## One command per bout, or all 12
+
+```bash
+uv run python run_pipeline.py --participant 21 --bout Ring --interaction EyePinch
+uv run python run_pipeline.py --participant 21 --all
+uv run python run_pipeline.py --participant 21 --all --keep-going
+uv run python run_pipeline.py --participant 21 --all --fill
+```
+
+`--all` runs the 12 cases (`Ring|Rectangle|PracticeRing|PracticeRectangle` × `Head|Hand|EyePinch`). Missing Motorola/Quest raw folders are skipped. Practice bouts are standing: Quest + Neon export only (no LF/RF). Walking Ring/Rectangle still need foot IMU for grid/gait. Coverage checks run automatically (`check_coverage.py`); pass `--skip-coverage` to omit them.
+
+Every stage script also accepts `--bout-dir <path>`.
 
 ## Pipeline
 
-| Step | Script | Output folder |
-|------|--------|---------------|
-| 0 (optional) | `check_imu_csv_quality.py` | report in `00_raw/` |
-| 1 | `correct_imu_t_utc.py` | `01_corrected/` |
-| 2 | `drop_imu_bad_dt.py` | `02_cleaned/` |
-| 3 | `grid_utc_200hz.py` | `03_grid_200hz/` |
-| 4 (optional) | `fill_grid_nan_linear.py` | `04_grid_200hz_filled/` |
-| 5 | `format_foot_xsens_csv.py` | `05_gait_xsens/` |
-
-### Step 0 — Quality check (optional)
-
-```bash
-uv run python check_imu_csv_quality.py \
-    ../../data/00_raw/<session>/LF_imu_fused_*.csv \
-    ../../data/00_raw/<session>/RF_imu_fused_*.csv \
-    -o ../../data/00_raw/<session>/quality_report.txt
-```
-
-### Step 1 — Fix bad `t_utc_ns` (Hampel)
+| Step | Folder | Script | Writes |
+|------|--------|--------|--------|
+| 00 | `01_00_sync/` | `compute_sync_json.py` | `sync.json` (usually already written by OpenEye GUI) |
+| chk | (root) | `check_coverage.py --stage pre` | `00_raw/coverage_check.json` — same session (Quest vs Neon vs feet) |
+| 01a | `01_01_export/` | `neon_raw_to_csv.py` | Motorola `gaze.csv`, `imu.csv` (PC clock) |
+| 01b | `01_01_export/` | `convert_quest_to_pc_ns.py` | `00_raw/Quest/quest_100hz.csv` |
+| 02 | `01_02_correct_utc/` | `correct_imu_t_utc.py` | `01_corrected/` |
+| 03 | `01_03_drop_dt/` | `drop_imu_bad_dt.py` | `02_cleaned/` |
+| 04 | `01_04_grid_200hz/` | `grid_utc_200hz.py` | `03_grid_200hz/` |
+| 04f | `01_04_grid_200hz/` | `fill_grid_nan_linear.py` | `04_grid_200hz_filled/` (optional) |
+| 05 | `01_05_gait_xsens/` | `format_foot_xsens_csv.py` | `05_gait_xsens/` |
+| chk | (root) | `check_coverage.py --stage post` | updates `coverage_check.json` — same clock (`grid_200hz_meta` / standing Quest–Neon) |
 
 ```bash
-uv run python correct_imu_t_utc.py \
-    ../../data/00_raw/<session>/LF_imu_fused_*.csv \
-    ../../data/00_raw/<session>/RF_imu_fused_*.csv \
-    --export-dir ../../data/00_raw/<session>/<neon_folder>
+uv run python 01_00_sync/compute_sync_json.py <OpenEye-dir>
+uv run python 01_01_export/neon_raw_to_csv.py --participant 11 --bout Ring --interaction EyePinch
+uv run python 01_01_export/convert_quest_to_pc_ns.py --participant 11 --bout Ring --interaction EyePinch
+uv run python 01_02_correct_utc/correct_imu_t_utc.py --participant 11 --bout Ring --interaction EyePinch
+uv run python 01_03_drop_dt/drop_imu_bad_dt.py --participant 11 --bout Ring --interaction EyePinch
+uv run python 01_04_grid_200hz/grid_utc_200hz.py --participant 11 --bout Ring --interaction EyePinch
+uv run python 01_05_gait_xsens/format_foot_xsens_csv.py --participant 11 --bout Ring --interaction EyePinch
 ```
 
-### Step 2 — Drop bad spacing
+Step 5 output `05_gait_xsens/`:
+
+- `LF.csv`, `RF.csv` — Xsens format for imu_gait_analysis
+- `gaze_200hz.csv`, `head_200hz.csv`, `grid_200hz_meta.csv`
+- `head_madgwick_200hz.csv`
+
+## Plots / QC (same step number as the stage they check)
+
+| Step | Script |
+|------|--------|
+| chk | `check_coverage.py --stage pre\|post` |
+| 02 | `01_02_correct_utc/plot_imu_t_utc_timeline.py` |
+| 02 | `01_02_correct_utc/check_imu_csv_quality.py` |
+| 02 | `01_02_correct_utc/check_disconnect.py` |
+| 04 | `01_04_grid_200hz/plot_movement_psd.py` |
+| 04 | `01_04_grid_200hz/plot_gaze_head_psd.py` |
+| 05 | `01_05_gait_xsens/plot_vor_interactive.py` |
+| 05 | `01_05_gait_xsens/plot_heel_strike_gaze.py` |
+| 05 | `01_05_gait_xsens/plot_lf_rf_rpy.py` |
 
 ```bash
-uv run python drop_imu_bad_dt.py \
-    --session-dir ../../data/01_corrected/<session>
+uv run python 01_04_grid_200hz/plot_movement_psd.py --session-dir ../../data/participants/participant0/Ring/EyePinch/03_grid_200hz
+uv run python 01_04_grid_200hz/plot_gaze_head_psd.py --session-dir ../../data/participants/participant0/Ring/EyePinch/03_grid_200hz
 ```
-
-### Step 3 — Shared 200 Hz grid
-
-```bash
-uv run python grid_utc_200hz.py \
-    --session-dir ../../data/02_cleaned/<session>
-```
-
-### Step 4 — Fill NaNs (optional)
-
-```bash
-uv run python fill_grid_nan_linear.py \
-    --session-dir ../../data/03_grid_200hz/<session>
-```
-
-### Step 5 — Gait analysis bundle
-
-```bash
-uv run python format_foot_xsens_csv.py --session 20260606_135203
-```
-
-Output `data/05_gait_xsens/<session>/`:
-
-- `LF.csv`, `RF.csv` — Xsens format for [imu_gait_analysis](https://github.com/Linn39/imu_gait_analysis)
-- `gaze_200hz.csv`, `head_200hz.csv`, `grid_200hz_meta.csv` — from `03_grid_200hz`
-- `LF_imu_fused_*_200hz.csv`, `RF_imu_fused_*_200hz.csv` — aligned foot streams (`t_utc_ns`)
-- `head_madgwick_200hz.csv` — head roll/pitch/yaw from accel + gyro (Madgwick 6-DOF, same step)
-
-## Validation plots
-
-```bash
-uv run python plot_imu_t_utc_timeline.py \
-    --session-dir ../../data/02_cleaned/<session> --cleaned --plain -o out.png --no-show
-
-uv run python plot_movement_psd.py --session-dir ../../data/03_grid_200hz/<session>
-uv run python plot_gaze_head_psd.py --session-dir ../../data/03_grid_200hz/<session>
-```
-
-## Quest / Neon clock sync (PC hub)
-
-Preferred: Neon-style **time-echo** (not one-way pulses).
-
-1. OpenEye GUI → TCP connected → **Start Quest↔PC time-echo** (period 1 s).
-2. Writes `external/OpenEye/tXX/sync.json` with `offset_quest_to_pc_ns`.
-3. If Neon connected, also fills `offset_phone_to_pc_ns` (feet follow phone).
-
-```bash
-uv run python convert_quest_to_pc_ns.py \
-  --sync ../../external/OpenEye/t00/sync.json \
-  trial.json -o ../../data/02_cleaned/<session>/quest_pc.csv
-```
-
-Legacy: `compute_sync_json.py` from old `sync_pulses.jsonl` still works.
-
-## One-liner flow
-
-```bash
-SESSION=20260606_135203
-NEON=../../data/00_raw/$SESSION/2026-06-06-13-52-03
-
-uv run python correct_imu_t_utc.py \
-    ../../data/00_raw/$SESSION/LF_imu_fused_${SESSION}.csv \
-    ../../data/00_raw/$SESSION/RF_imu_fused_${SESSION}.csv \
-    --export-dir $NEON
-
-uv run python drop_imu_bad_dt.py --session-dir ../../data/01_corrected/$SESSION
-uv run python grid_utc_200hz.py --session-dir ../../data/02_cleaned/$SESSION
-uv run python format_foot_xsens_csv.py --session $SESSION
-```
-
-Default `--output-root` values resolve via `_paths.py` (no need to pass them unless overriding).

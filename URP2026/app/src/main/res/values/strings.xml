@@ -42,4 +42,13 @@
     <string name="flow_btn_stop_both">Stop both recording</string>
     <string name="qtpy_latency_diag_title">QT Py → phone latency (diag)</string>
     <string name="qtpy_latency_diag_hint">Compares consecutive IMU rows: Δrecv_elapsed vs Δtime_us_extended. IMU↔QT Py I²C is not measured here (use firmware micros() on the board).</string>
+    <string name="fg_channel_name">URP2026 recording</string>
+    <string name="fg_channel_desc">Keeps QT Py USB and PC bridge alive in the background</string>
+    <string name="fg_title_idle">URP2026 ready</string>
+    <string name="fg_title_bridge">URP2026 PC bridge</string>
+    <string name="fg_title_connected">URP2026 QT Py connected</string>
+    <string name="fg_title_streaming">URP2026 IMU streaming</string>
+    <string name="fg_title_recording">URP2026 recording</string>
+    <string name="fg_action_stop">Stop service</string>
+    <string name="fg_hint">Background service + wake lock keep USB/PC alive; soft USB auto-reconnect retries after drops (Disconnect disables it).</string>
 </resources>

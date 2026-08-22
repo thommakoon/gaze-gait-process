@@ -5,7 +5,7 @@
 //                  0 = IMU on Wire1 directly (no mux)
 // I2C bus: Wire1 (QT Py secondary I2C for Qwiic).
 
-#define USE_QWIIC_MUX 1
+#define USE_QWIIC_MUX 0
 
 #include <Wire.h>
 #if USE_QWIIC_MUX

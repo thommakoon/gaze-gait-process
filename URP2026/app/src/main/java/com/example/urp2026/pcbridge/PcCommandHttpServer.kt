@@ -51,10 +51,8 @@ data class PcActionResult(
 class PcCommandHttpServer(
     private val port: Int = DEFAULT_PORT,
     private val onQtPyCommand: suspend (String) -> String,
+    private val onHealthSnapshot: suspend () -> String,
     private val qtPyConnected: () -> Boolean,
-    private val qtPyFirmwareState: () -> String = { "UNKNOWN" },
-    private val qtPyStreaming: () -> Boolean = { false },
-    private val recordingActive: () -> Boolean = { false },
     private val onRecordStart: suspend () -> PcActionResult,
     private val onRecordStop: suspend () -> PcActionResult,
 ) {
@@ -165,18 +163,10 @@ class PcCommandHttpServer(
 
             when {
                 path == "/health" || path == "/" -> {
-                    val bodyOut = buildString {
-                        append("ok=1\n")
-                        append("qtpy_connected=").append(qtPyConnected()).append('\n')
-                        append("qtpy_firmware=").append(qtPyFirmwareState()).append('\n')
-                        append("qtpy_streaming=").append(qtPyStreaming()).append('\n')
-                        append("recording_active=").append(recordingActive()).append('\n')
-                        append("ready_to_record=")
-                            .append(qtPyStreaming() && !recordingActive())
-                            .append('\n')
-                        append("bridge=").append(_state.value.bindHint).append('\n')
-                        append("cmds=calibrate,start,stop,status,next,record_start,record_stop\n")
-                        append("GET /record/start|/record/stop\n")
+                    val bodyOut = try {
+                        onHealthSnapshot()
+                    } catch (e: Exception) {
+                        "ok=0\nerror=${e.message ?: e.javaClass.simpleName}\n"
                     }
                     writeHttp(socket, 200, "text/plain; charset=utf-8", bodyOut)
                 }

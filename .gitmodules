@@ -13,3 +13,9 @@
 [submodule "QuestApp-MainStudy"]
 	path = QuestApp-MainStudy
 	url = https://github.com/thommakoon/QuestApp-MainStudy.git
+[submodule "external/OpenEye-QuestPro"]
+	path = external/OpenEye-QuestPro
+	url = https://github.com/thommakoon/OpenEye-QuestPro.git
+[submodule "QuestApp-MainStudy-Pro"]
+	path = QuestApp-MainStudy-Pro
+	url = https://github.com/thommakoon/QuestApp-MainStudy-Pro.git

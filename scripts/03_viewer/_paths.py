@@ -10,3 +10,12 @@ GAIT_XSENS = DATA_ROOT / "05_gait_xsens"
 GAIT_RESULT = DATA_ROOT / "imu_gait_analysis_result"
 
 DEFAULT_SUBJECT = "imu_thom_2026_06_06"
+
+# --- New per-participant nested (bout) layout ------------------------------- #
+PARTICIPANTS = DATA_ROOT / "participants"
+
+# stage key -> folder name within a bout
+STAGE_DIRS = {
+    "gait_xsens": "05_gait_xsens",
+    "gait": "06_gait_analysis",
+}

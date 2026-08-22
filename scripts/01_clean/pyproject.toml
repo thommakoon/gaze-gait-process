@@ -2,7 +2,7 @@
 name = "gazegait-01-clean"
 version = "0.1.0"
 description = "gazeGait 01_clean — IMU QC, timestamp correction, grid resampling, plots."
-requires-python = ">=3.9,<3.12"
+requires-python = ">=3.9,<3.13"
 
 dependencies = [
     "numpy>=1.21,<2",

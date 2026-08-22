@@ -1,10 +1,14 @@
 package com.example.urp2026
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -24,6 +28,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,22 +41,29 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.example.urp2026.integration.ImuRecorderIntegration
+import com.example.urp2026.integration.RecorderRuntime
 import com.example.urp2026.qtpy.QtPyLinkLatencyDiagnostics
+import com.example.urp2026.service.RecordingForegroundService
 import com.example.urp2026.ui.theme.URP2026Theme
 import kotlinx.coroutines.launch
 
 private const val LOG_MAX_LINES = 48
 
 class MainActivity : ComponentActivity() {
+    private val requestNotifications = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { /* optional; service still runs if denied on some OEMs */ }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
             URP2026Theme {
-                val integration = remember { ImuRecorderIntegration(applicationContext) }
+                val integration = remember { RecorderRuntime.get(applicationContext) }
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     NeonProbeScreen(
                         integration = integration,
@@ -59,6 +71,27 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             }
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        // After UI is up — avoid crashing the Activity if FGS is denied/misconfigured.
+        try {
+            RecordingForegroundService.ensureStarted(this)
+        } catch (_: Throwable) {
+        }
+        maybeRequestNotificationPermission()
+    }
+
+    private fun maybeRequestNotificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val granted = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.POST_NOTIFICATIONS,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            requestNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
 }
@@ -69,8 +102,10 @@ fun NeonProbeScreen(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    // Do NOT close RecorderRuntime here — foreground service owns lifetime.
     DisposableEffect(Unit) {
-        onDispose { integration.close() }
+        RecordingForegroundService.ensureStarted(context)
+        onDispose { }
     }
     val qtPyState by integration.qtPyStateFlow().collectAsState()
     val pcBridgeState by integration.pcBridgeStateFlow().collectAsState()
@@ -90,6 +125,19 @@ fun NeonProbeScreen(
         recordingIdDisplay = integration.neonActiveRecordingId()
         combinedActive = integration.isCombinedSessionActive()
         csvSessionInfo = integration.csvSessionInfo()
+        RecordingForegroundService.refresh(context)
+    }
+
+    // Update notification when USB / firmware / bridge / session flags change (not every IMU line).
+    LaunchedEffect(
+        qtPyState.connected,
+        qtPyState.firmwareState,
+        qtPyState.isStreaming,
+        combinedActive,
+        pcBridgeState.running,
+        recordingIdDisplay,
+    ) {
+        RecordingForegroundService.refresh(context)
     }
 
     fun append(line: String) {
@@ -158,6 +206,10 @@ fun NeonProbeScreen(
         Text(
             text = stringResource(R.string.neon_hint),
             style = MaterialTheme.typography.bodyMedium,
+        )
+        Text(
+            text = stringResource(R.string.fg_hint),
+            style = MaterialTheme.typography.bodySmall,
         )
         Text(
             text = if (busy) stringResource(R.string.neon_busy) else "QT Py bridge: ${integration.qtPyReady()}",
@@ -263,11 +315,24 @@ fun NeonProbeScreen(
         }
 
         Button(
-            onClick = { runNeon("qtpy_connect") { integration.qtPyConnectResult() } },
+            onClick = {
+                runNeon("qtpy_connect") {
+                    val result = integration.qtPyConnectResult()
+                    RecordingForegroundService.ensureStarted(context)
+                    RecordingForegroundService.refresh(context)
+                    result
+                }
+            },
             enabled = !busy,
         ) { Text(stringResource(R.string.qtpy_btn_connect)) }
         Button(
-            onClick = { runNeon("qtpy_disconnect") { integration.qtPyDisconnectResult() } },
+            onClick = {
+                runNeon("qtpy_disconnect") {
+                    val result = integration.qtPyDisconnectResult()
+                    RecordingForegroundService.refresh(context)
+                    result
+                }
+            },
             enabled = !busy,
         ) { Text(stringResource(R.string.qtpy_btn_disconnect)) }
         Button(
@@ -317,7 +382,9 @@ fun NeonProbeScreen(
         }
         Button(
             onClick = {
+                RecordingForegroundService.ensureStarted(context)
                 val msg = integration.pcBridgeStart()
+                RecordingForegroundService.refresh(context)
                 append("pc_bridge → $msg")
                 lastResult = msg
                 Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
@@ -327,6 +394,7 @@ fun NeonProbeScreen(
         Button(
             onClick = {
                 val msg = integration.pcBridgeStop()
+                RecordingForegroundService.refresh(context)
                 append("pc_bridge → $msg")
                 lastResult = msg
                 Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
@@ -340,11 +408,24 @@ fun NeonProbeScreen(
             style = MaterialTheme.typography.titleMedium,
         )
         Button(
-            onClick = { runNeon("start_both") { integration.startBothIfQtPyConnected() } },
+            onClick = {
+                runNeon("start_both") {
+                    RecordingForegroundService.ensureStarted(context)
+                    val result = integration.startBothIfQtPyConnected()
+                    RecordingForegroundService.refresh(context)
+                    result
+                }
+            },
             enabled = !busy && qtPyState.isStreaming && !combinedActive,
         ) { Text(stringResource(R.string.flow_btn_start_both)) }
         Button(
-            onClick = { runNeon("stop_both") { integration.stopBothSession() } },
+            onClick = {
+                runNeon("stop_both") {
+                    val result = integration.stopBothSession()
+                    RecordingForegroundService.refresh(context)
+                    result
+                }
+            },
             enabled = !busy && combinedActive,
         ) { Text(stringResource(R.string.flow_btn_stop_both)) }
 

@@ -12,6 +12,8 @@ import com.example.urp2026.qtpy.QtPyBridgeState
 import com.example.urp2026.qtpy.QtPyFirmwareState
 import com.example.urp2026.qtpy.QtPyLineRecord
 import com.example.urp2026.qtpy.QtPySerialBridge
+import com.example.urp2026.qtpy.QtPyUsbIssue
+import com.example.urp2026.service.RecordingForegroundService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -44,10 +46,8 @@ class ImuRecorderIntegration(
 
     private val pcBridge = PcCommandHttpServer(
         onQtPyCommand = { cmd -> qtPy.writeCommand(cmd) },
+        onHealthSnapshot = { buildPcHealthSnapshot() },
         qtPyConnected = { qtPy.isReady() },
-        qtPyFirmwareState = { qtPy.firmwareState().name },
-        qtPyStreaming = { qtPy.isStreaming() },
-        recordingActive = { combinedSessionActive.get() },
         onRecordStart = { startBothForPc() },
         onRecordStop = { stopBothForPc() },
     )
@@ -67,24 +67,64 @@ class ImuRecorderIntegration(
          */
         const val HEARTBEAT_EVERY_N_LINES: Long = 1000L
 
+        /** If STREAMING but no IMU CSV for this long, report imu_stalled=true. */
+        const val IMU_STALL_MS: Long = 500L
+
+        /** Rolling Acc quality window (~2 s at 100 Hz). */
+        const val ACC_WINDOW: Int = 200
+
+        /** Known bad fused Acc freeze seen on QT Py dual IMU. */
+        const val STUCK_ACC_X: Double = 77.213
+        const val STUCK_ACC_Y: Double = 77.227
+        const val STUCK_EPS: Double = 0.05
+
+        /** Acc_Z treated as dead if |z| below this (m/s^2). */
+        const val ACC_Z_DEAD_EPS: Double = 0.05
+
+        /** Fail Acc quality if stuck or Acc_Z-dead fraction exceeds this. */
+        const val ACC_BAD_FRAC: Double = 0.5
+
         /** Current Unix-epoch nanoseconds; what Neon `/api/event` expects in `timestamp`. */
         private fun utcNanosNow(): Long = System.currentTimeMillis() * 1_000_000L
     }
+
+    /** Rolling Acc quality for LF/RF (updated on every parsed IMU line, even when not recording). */
+    private val accQuality = AccQualityTracker(ACC_WINDOW)
 
     fun qtPyReady(): Boolean = qtPy.isReady()
     fun qtPyIsStreaming(): Boolean = qtPy.isStreaming()
     fun qtPyStateFlow(): StateFlow<QtPyBridgeState> = qtPy.state
     fun pcBridgeStateFlow(): StateFlow<PcBridgeState> = pcBridge.state
 
-    suspend fun qtPyConnectResult(): String = qtPy.connect()
-    suspend fun qtPyDisconnectResult(): String = qtPy.disconnect()
+    suspend fun qtPyConnectResult(): String {
+        val result = qtPy.connect()
+        refreshFg()
+        return result
+    }
+
+    suspend fun qtPyDisconnectResult(): String {
+        val result = qtPy.disconnect()
+        refreshFg()
+        return result
+    }
     /** After USB permission dialog / resume: open if already permitted. Null = nothing to do. */
     suspend fun qtPyTryConnectIfPermitted(): String? = qtPy.tryConnectIfPermitted()
     suspend fun qtPySendCommand(command: String): String = qtPy.writeCommand(command)
     fun qtPyClearMonitor() = qtPy.clearRecentLines()
 
-    fun pcBridgeStart(): String = pcBridge.start()
-    fun pcBridgeStop(): String = pcBridge.stop()
+    fun pcBridgeStart(): String {
+        RecordingForegroundService.ensureStarted(appContext)
+        val msg = pcBridge.start()
+        RecordingForegroundService.refresh(appContext)
+        return msg
+    }
+
+    fun pcBridgeStop(): String {
+        val msg = pcBridge.stop()
+        RecordingForegroundService.refresh(appContext)
+        return msg
+    }
+
     fun pcBridgeRunning(): Boolean = pcBridge.isRunning()
 
     fun csvSessionInfo(): String? = csvSessionInfo.get()
@@ -99,6 +139,92 @@ class ImuRecorderIntegration(
 
     fun neonActiveRecordingId(): String? = activeRecordingId.get()
     fun isCombinedSessionActive(): Boolean = combinedSessionActive.get()
+
+    private fun refreshFg() {
+        RecordingForegroundService.refresh(appContext)
+    }
+    /**
+     * PC monitor snapshot (polled ~1 Hz). Fast local fields + short Neon Companion status probe.
+     * Stall: STREAMING but no IMU CSV row for > [IMU_STALL_MS].
+     */
+    suspend fun buildPcHealthSnapshot(): String {
+        val st = qtPy.state.value
+        val fw = st.firmwareState.name
+        val streaming = st.isStreaming
+        val imuAge = qtPy.imuAgeMs()
+        val stalled = streaming && (imuAge == null || imuAge > IMU_STALL_MS)
+        val recording = combinedSessionActive.get()
+        val neonId = activeRecordingId.get()
+        val usbDevicePresent = qtPy.usbDevicePresent()
+        val usbReconnectMayBeRequired = st.usbIssue in setOf(
+            QtPyUsbIssue.DETACHED,
+            QtPyUsbIssue.READ_ERROR,
+            QtPyUsbIssue.WRITE_ERROR,
+            QtPyUsbIssue.OPEN_FAILED,
+            QtPyUsbIssue.STALLED,
+        ) || stalled
+        val usbDiagnosis = when {
+            stalled -> "STREAM_STALLED_OR_BOARD_HUNG"
+            st.usbIssue != QtPyUsbIssue.NONE -> st.usbIssue.name
+            st.connected -> "OK"
+            usbDevicePresent -> "DEVICE_PRESENT_NOT_CONNECTED"
+            else -> "NO_DEVICE"
+        }
+
+        val neonProbe = when (val r = neon.neonStatus()) {
+            is NeonHttpResult.Ok -> "neon_reachable=true\nneon_detail=${summarizeStatus(r.value)}"
+            is NeonHttpResult.Err -> "neon_reachable=false\nneon_detail=${r.describe("GET /status")}"
+        }
+
+        val acc = accQuality.snapshot()
+        val accOk = acc.samples > 20 && acc.lfOk && acc.rfOk
+        val ready = streaming && !recording && !stalled && accOk
+
+        return buildString {
+            append("ok=1\n")
+            append("qtpy_connected=").append(st.connected).append('\n')
+            append("qtpy_firmware=").append(fw).append('\n')
+            append("qtpy_streaming=").append(streaming).append('\n')
+            append("usb_device_present=").append(usbDevicePresent).append('\n')
+            append("usb_diagnosis=").append(usbDiagnosis).append('\n')
+            append("usb_issue=").append(st.usbIssue.name).append('\n')
+            append("usb_issue_detail=")
+                .append(st.usbIssueDetail.replace('\n', ' ').replace('\r', ' '))
+                .append('\n')
+            append("usb_issue_wall_ms=")
+                .append(st.usbIssueWallTimeMs?.toString() ?: "none")
+                .append('\n')
+            append("usb_physical_reconnect_may_be_required=")
+                .append(usbReconnectMayBeRequired && !usbDevicePresent)
+                .append('\n')
+            append("usb_want_connected=").append(qtPy.wantsConnection()).append('\n')
+            append("usb_auto_reconnect_attempt=")
+                .append(qtPy.autoReconnectAttempt())
+                .append('\n')
+            append("imu_age_ms=").append(imuAge?.toString() ?: "none").append('\n')
+            append("imu_stalled=").append(stalled).append('\n')
+            append("imu_last_seq=").append(st.lastSeq?.toString() ?: "none").append('\n')
+            append("imu_recording=").append(recording).append('\n')
+            append("neon_recording_id=").append(neonId ?: "none").append('\n')
+            append("neon_recording=").append(neonId != null).append('\n')
+            append("recording_active=").append(recording).append('\n')
+            append("acc_samples=").append(acc.samples).append('\n')
+            append("acc_ok_lf=").append(acc.lfOk).append('\n')
+            append("acc_ok_rf=").append(acc.rfOk).append('\n')
+            append("acc_ok=").append(accOk).append('\n')
+            append("acc_stuck_frac_lf=").append("%.3f".format(acc.lfStuckFrac)).append('\n')
+            append("acc_stuck_frac_rf=").append("%.3f".format(acc.rfStuckFrac)).append('\n')
+            append("acc_z_dead_frac_lf=").append("%.3f".format(acc.lfZDeadFrac)).append('\n')
+            append("acc_z_dead_frac_rf=").append("%.3f".format(acc.rfZDeadFrac)).append('\n')
+            append("acc_last_lf=").append(acc.lfLast).append('\n')
+            append("acc_last_rf=").append(acc.rfLast).append('\n')
+            append("ready_to_record=").append(ready).append('\n')
+            append(neonProbe).append('\n')
+            csvSessionInfo.get()?.let { append("csv=").append(it).append('\n') }
+            append("bridge=").append(pcBridge.state.value.bindHint).append('\n')
+            append("cmds=calibrate,start,stop,status,next,record_start,record_stop,watch\n")
+        }
+    }
 
     suspend fun neonStatusSummary(): String = when (val r = neon.neonStatus()) {
         is NeonHttpResult.Ok -> summarizeStatus(r.value)
@@ -211,6 +337,7 @@ class ImuRecorderIntegration(
         val result = neonStartFootSessionLikeRecorder()
         if (activeRecordingId.get() != null) {
             combinedSessionActive.set(true)
+            refreshFg()
             return "$result\n${csvSessionInfo.get()}"
         }
         csvRecorder.close()
@@ -255,6 +382,7 @@ class ImuRecorderIntegration(
         val result = neonStopFootSessionLikeRecorder()
         combinedSessionActive.set(false)
         csvRecorder.close()
+        refreshFg()
         return buildString {
             append(result)
             csvSessionInfo.get()?.let { append("\n").append(it) }
@@ -262,8 +390,10 @@ class ImuRecorderIntegration(
     }
 
     private fun onQtPyLineRecord(record: QtPyLineRecord) {
-        if (!combinedSessionActive.get()) return
         val parsed = parseDualImuCsvLine(record.rawLine) ?: return
+        // Always update Acc quality while streaming (even before record_start).
+        accQuality.push(parsed.lf, parsed.rf)
+        if (!combinedSessionActive.get()) return
         csvRecorder.appendIcm20(
             seq = parsed.seq,
             timeUs = parsed.timeUs,
@@ -394,5 +524,103 @@ class ImuRecorderIntegration(
         } else {
             File(appContext.filesDir, "recordings/thom/data").apply { mkdirs() }
         }
+    }
+}
+
+/**
+ * Rolling Acc quality for LF/RF. Detects the two failure modes that killed participant50:
+ * frozen Acc ≈ (77.213, 77.227, *) and Acc_Z stuck near 0.
+ */
+internal class AccQualityTracker(
+    private val window: Int,
+    private val badFrac: Double = ImuRecorderIntegration.ACC_BAD_FRAC,
+) {
+    data class Snapshot(
+        val samples: Int,
+        val lfOk: Boolean,
+        val rfOk: Boolean,
+        val lfStuckFrac: Double,
+        val rfStuckFrac: Double,
+        val lfZDeadFrac: Double,
+        val rfZDeadFrac: Double,
+        val lfLast: String,
+        val rfLast: String,
+    )
+
+    private val lock = Any()
+    private val lfStuck = BooleanArray(window)
+    private val rfStuck = BooleanArray(window)
+    private val lfZDead = BooleanArray(window)
+    private val rfZDead = BooleanArray(window)
+    private var idx = 0
+    private var filled = 0
+    private var lfLastX = 0.0
+    private var lfLastY = 0.0
+    private var lfLastZ = 0.0
+    private var rfLastX = 0.0
+    private var rfLastY = 0.0
+    private var rfLastZ = 0.0
+
+    fun push(lf: DoubleArray, rf: DoubleArray) {
+        val lax = lf.getOrElse(0) { 0.0 }
+        val lay = lf.getOrElse(1) { 0.0 }
+        val laz = lf.getOrElse(2) { 0.0 }
+        val rax = rf.getOrElse(0) { 0.0 }
+        val ray = rf.getOrElse(1) { 0.0 }
+        val raz = rf.getOrElse(2) { 0.0 }
+        synchronized(lock) {
+            lfStuck[idx] = isStuckAcc(lax, lay)
+            rfStuck[idx] = isStuckAcc(rax, ray)
+            lfZDead[idx] = kotlin.math.abs(laz) < ImuRecorderIntegration.ACC_Z_DEAD_EPS
+            rfZDead[idx] = kotlin.math.abs(raz) < ImuRecorderIntegration.ACC_Z_DEAD_EPS
+            lfLastX = lax; lfLastY = lay; lfLastZ = laz
+            rfLastX = rax; rfLastY = ray; rfLastZ = raz
+            idx = (idx + 1) % window
+            if (filled < window) filled++
+        }
+    }
+
+    fun snapshot(): Snapshot = synchronized(lock) {
+        val n = filled
+        if (n == 0) {
+            return Snapshot(
+                samples = 0,
+                lfOk = false,
+                rfOk = false,
+                lfStuckFrac = 0.0,
+                rfStuckFrac = 0.0,
+                lfZDeadFrac = 0.0,
+                rfZDeadFrac = 0.0,
+                lfLast = "none",
+                rfLast = "none",
+            )
+        }
+        var ls = 0; var rs = 0; var lz = 0; var rz = 0
+        for (i in 0 until n) {
+            if (lfStuck[i]) ls++
+            if (rfStuck[i]) rs++
+            if (lfZDead[i]) lz++
+            if (rfZDead[i]) rz++
+        }
+        val lfStuckFrac = ls.toDouble() / n
+        val rfStuckFrac = rs.toDouble() / n
+        val lfZDeadFrac = lz.toDouble() / n
+        val rfZDeadFrac = rz.toDouble() / n
+        Snapshot(
+            samples = n,
+            lfOk = lfStuckFrac < badFrac && lfZDeadFrac < badFrac,
+            rfOk = rfStuckFrac < badFrac && rfZDeadFrac < badFrac,
+            lfStuckFrac = lfStuckFrac,
+            rfStuckFrac = rfStuckFrac,
+            lfZDeadFrac = lfZDeadFrac,
+            rfZDeadFrac = rfZDeadFrac,
+            lfLast = "%.2f,%.2f,%.2f".format(lfLastX, lfLastY, lfLastZ),
+            rfLast = "%.2f,%.2f,%.2f".format(rfLastX, rfLastY, rfLastZ),
+        )
+    }
+
+    private fun isStuckAcc(ax: Double, ay: Double): Boolean {
+        return kotlin.math.abs(ax - ImuRecorderIntegration.STUCK_ACC_X) < ImuRecorderIntegration.STUCK_EPS &&
+            kotlin.math.abs(ay - ImuRecorderIntegration.STUCK_ACC_Y) < ImuRecorderIntegration.STUCK_EPS
     }
 }

@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """Live Neon gaze overlay on a physical monitor using ArUco corner markers.
 
-Shows a fullscreen window with 4 ArUco markers at the corners.
-Reads the Neon scene camera video + gaze in real time, detects the markers,
-builds a homography (undistorted scene pixels → monitor pixels), and draws
-a gaze cursor on the monitor where the user is looking.
+Windowed by default: (1) monitor canvas with ArUco + gaze cursor,
+(2) scene preview with ArUco detection overlay (like neon_aruco_detect.py).
 
-Prerequisites:
-  uv add opencv-contrib-python pupil-labs-realtime-api
+Stabilization (on by default): EMA corners/homography/gaze, head-IMU tag
+propagation. With --imu-lock (default): ArUco snaps H when head is still;
+IMU propagates mapping while moving.
 
 Examples:
-  uv run python neon_monitor_gaze.py --ip 192.168.1.42
-  uv run python neon_monitor_gaze.py --ip 192.168.1.42 --marker-size 120
-  uv run python neon_monitor_gaze.py            # auto-discover Companion on LAN
+  uv run python neon_monitor_gaze.py
+  uv run python neon_monitor_gaze.py --width 1920 --height 1080
+  uv run python neon_monitor_gaze.py --fullscreen --ip 192.168.0.163
+  uv run python neon_monitor_gaze.py --no-imu-lock   # legacy continuous ArUco H
+  uv run python neon_monitor_gaze.py --shake --tune
 """
 
 from __future__ import annotations
@@ -27,20 +28,30 @@ from typing import Optional
 import cv2
 import numpy as np
 
+from aruco_preview import (
+    add_surface_cli_args,
+    draw_aruco_overlay,
+    run_aruco_detection,
+)
+from aruco_stabilize import (
+    ARUCO_DICT_ID,
+    CORNER_IDS,
+    ImuAssistConfig,
+    MarkerTracker,
+    add_imu_cli_args,
+    add_motion_cli_args,
+    apply_shake_preset,
+    default_corner_marker_size,
+    imu_config_from_args,
+    make_aruco_detector,
+    preprocess_gray,
+    smooth_homography,
+    smooth_point,
+)
+from aruco_tune_panel import ArucoTunePanel, add_tune_cli_args
+from imu_homography_lock import HomographyMode, ImuHomographyLock, add_imu_lock_cli_args
 from neon_probe import discover_ip
-
-# ---------------------------------------------------------------------------
-# ArUco setup — DICT_4X4_50 is fast to detect and easy to print
-# ---------------------------------------------------------------------------
-ARUCO_DICT_ID = cv2.aruco.DICT_4X4_50
-# Marker IDs assigned to corners (top-left, top-right, bottom-right, bottom-left)
-CORNER_IDS = [0, 1, 2, 3]  # TL, TR, BR, BL
-
-
-def make_aruco_detector() -> cv2.aruco.ArucoDetector:
-    aruco_dict = cv2.aruco.getPredefinedDictionary(ARUCO_DICT_ID)
-    params = cv2.aruco.DetectorParameters()
-    return cv2.aruco.ArucoDetector(aruco_dict, params)
+from neon_stream import drain_imu, get_scene_calibration
 
 
 # ---------------------------------------------------------------------------
@@ -56,29 +67,7 @@ def undistort_point(x: float, y: float, K: np.ndarray, D: np.ndarray) -> tuple[f
 
 def get_calibration(device) -> Optional[tuple[np.ndarray, np.ndarray]]:
     """Return (K 3x3, D 8,) arrays from Neon device, or None."""
-    fn = getattr(device, "get_calibration", None)
-    if not callable(fn):
-        return None
-    try:
-        cal = fn()
-    except Exception as e:
-        print(f"[cal] get_calibration() failed: {e}", file=sys.stderr)
-        return None
-    matrix = getattr(cal, "scene_camera_matrix", None)
-    if matrix is None:
-        matrix = getattr(cal, "camera_matrix", None)
-
-    dist = getattr(cal, "scene_distortion_coefficients", None)
-    if dist is None:
-        dist = getattr(cal, "dist_coefs", None)
-    if dist is None:
-        dist = getattr(cal, "distortion_coefficients", None)
-    if matrix is None or dist is None:
-        print("[cal] calibration fields missing.", file=sys.stderr)
-        return None
-    K = np.array(matrix, dtype=np.float64).reshape(3, 3)
-    D = np.array(dist, dtype=np.float64).reshape(-1)
-    return K, D
+    return get_scene_calibration(device)
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +117,14 @@ def build_marker_image(
     return canvas, corners_monitor
 
 
+def window_client_size(win: str, fallback: tuple[int, int]) -> tuple[int, int]:
+    rect = cv2.getWindowImageRect(win)
+    width, height = rect[2], rect[3]
+    if width > 0 and height > 0:
+        return width, height
+    return fallback
+
+
 # ---------------------------------------------------------------------------
 # Background thread: read scene frames + gaze from Neon
 # ---------------------------------------------------------------------------
@@ -139,6 +136,8 @@ class NeonFrame:
     gaze_y: float
     worn: bool
     ts: float
+    imu_quat: Optional[tuple[float, float, float, float]] = None
+    imu_gyro_mag: Optional[float] = None
 
 
 class NeonReader(threading.Thread):
@@ -165,6 +164,10 @@ class NeonReader(threading.Thread):
 
         try:
             while not self._stop.is_set():
+                imu_sample = drain_imu(device)
+                imu_quat = imu_sample["quat_xyzw"] if imu_sample else None
+                imu_gyro = imu_sample["gyro_mag_deg_s"] if imu_sample else None
+
                 result = device.receive_matched_scene_video_frame_and_gaze(timeout_seconds=0.5)
                 if result is None:
                     continue
@@ -184,6 +187,8 @@ class NeonReader(threading.Thread):
                     gaze_y=float(gaze.y),
                     worn=bool(gaze.worn),
                     ts=float(gaze.timestamp_unix_seconds),
+                    imu_quat=imu_quat,
+                    imu_gyro_mag=imu_gyro,
                 )
         except Exception as e:
             self.error = str(e)
@@ -198,21 +203,14 @@ class NeonReader(threading.Thread):
 # Homography computation from detected ArUco corners
 # ---------------------------------------------------------------------------
 
-def detect_and_compute_homography(
-    scene_bgr: np.ndarray,
-    detector: cv2.aruco.ArucoDetector,
+def homography_from_detections(
+    detected_corners: list,
+    detected_ids: np.ndarray,
     corners_monitor: dict[int, list[tuple[float, float]]],
     K: Optional[np.ndarray],
     D: Optional[np.ndarray],
 ) -> Optional[np.ndarray]:
-    """
-    Detect ArUco markers in scene frame, match to known monitor corners,
-    compute and return homography (scene undistorted → monitor pixels).
-    Returns None if fewer than 2 markers found.
-    """
-    gray = cv2.cvtColor(scene_bgr, cv2.COLOR_BGR2GRAY)
-    detected_corners, detected_ids, _ = detector.detectMarkers(gray)
-
+    """Build homography from already-detected ArUco corners."""
     if detected_ids is None or len(detected_ids) < 2:
         return None
 
@@ -222,9 +220,7 @@ def detect_and_compute_homography(
     for corners, marker_id in zip(detected_corners, detected_ids.flatten()):
         if marker_id not in corners_monitor:
             continue
-        # corners shape: (1, 4, 2), order TL TR BR BL
         for i, (sx, sy) in enumerate(corners[0]):
-            # Undistort if calibration available
             if K is not None and D is not None:
                 sx, sy = undistort_point(float(sx), float(sy), K, D)
             scene_pts.append((sx, sy))
@@ -237,6 +233,22 @@ def detect_and_compute_homography(
     dst = np.array(monitor_pts, dtype=np.float32)
     H, _ = cv2.findHomography(src, dst, cv2.RANSAC, 3.0)
     return H
+
+
+def detect_and_compute_homography(
+    scene_bgr: np.ndarray,
+    detector: cv2.aruco.ArucoDetector,
+    corners_monitor: dict[int, list[tuple[float, float]]],
+    K: Optional[np.ndarray],
+    D: Optional[np.ndarray],
+) -> Optional[np.ndarray]:
+    gray = preprocess_gray(cv2.cvtColor(scene_bgr, cv2.COLOR_BGR2GRAY))
+    detected_corners, detected_ids, _ = detector.detectMarkers(gray)
+    if detected_ids is None:
+        return None
+    return homography_from_detections(
+        detected_corners, detected_ids, corners_monitor, K, D
+    )
 
 
 def apply_homography(H: np.ndarray, x: float, y: float) -> tuple[float, float]:
@@ -285,6 +297,24 @@ def grid_points(cols: int, rows: int, w: int, h: int, margin_frac: float = 0.15)
     return pts
 
 
+def detection_corners_for_homography(
+    raw_corners: list,
+    raw_ids: np.ndarray | None,
+    tracker: MarkerTracker | None,
+    *,
+    stabilize_on: bool,
+) -> tuple[list, np.ndarray]:
+    """Prefer raw detections for homography snap (no IMU-predicted corners)."""
+    if raw_ids is not None and len(raw_ids) > 0:
+        return raw_corners or [], raw_ids
+    if stabilize_on and tracker is not None:
+        live_c, live_i = tracker.live_detections()
+        if live_i is not None and len(live_i) > 0:
+            return live_c, live_i
+    empty = np.array([], dtype=np.int32)
+    return raw_corners or [], raw_ids if raw_ids is not None else empty
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -296,9 +326,33 @@ def main() -> int:
     parser.add_argument("--ip", help="Companion phone IP (skip mDNS discovery)")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--discover-seconds", type=float, default=10.0)
+    parser.add_argument("--width", type=int, default=1280, help="Window width (default 1280)")
+    parser.add_argument("--height", type=int, default=720, help="Window height (default 720)")
     parser.add_argument(
-        "--marker-size", type=int, default=100,
-        help="ArUco marker side length in pixels (default 100)",
+        "--fullscreen",
+        action="store_true",
+        help="Fullscreen monitor window instead of resizable window",
+    )
+    parser.add_argument(
+        "--no-scene-preview",
+        action="store_true",
+        help="Hide the second window (Neon scene camera + ArUco overlay)",
+    )
+    parser.add_argument(
+        "--scene-width",
+        type=int,
+        default=1280,
+        help="Scene preview window width (default 1280)",
+    )
+    parser.add_argument(
+        "--scene-height",
+        type=int,
+        default=720,
+        help="Scene preview window height (default 720)",
+    )
+    parser.add_argument(
+        "--marker-size", type=int, default=0,
+        help="ArUco marker side length in pixels (0 = auto, ~33%% of shorter edge)",
     )
     parser.add_argument(
         "--margin", type=int, default=20,
@@ -320,7 +374,42 @@ def main() -> int:
     parser.add_argument("--cal-rows", type=int, default=3, help="Calibration grid rows (default 3)")
     parser.add_argument("--cal-dwell", type=float, default=1.2, help="Seconds per calibration dot (default 1.2)")
     parser.add_argument("--cal-warmup", type=float, default=0.25, help="Ignore first seconds after dot switch (default 0.25)")
+    parser.add_argument(
+        "--no-stabilize",
+        action="store_true",
+        help="Disable temporal marker / homography / gaze smoothing",
+    )
+    parser.add_argument(
+        "--hold-frames",
+        type=int,
+        default=12,
+        help="Keep lost markers frozen for N frames (short; stale if head moves). Default 12",
+    )
+    parser.add_argument(
+        "--homography-hold",
+        type=float,
+        default=2.0,
+        help="Keep last good screen mapping for N seconds when tags drop out (default 2.0)",
+    )
+    parser.add_argument(
+        "--smooth-alpha",
+        type=float,
+        default=0.35,
+        help="EMA weight for new observations, 0–1 (default 0.35)",
+    )
+    add_imu_cli_args(parser)
+    add_motion_cli_args(parser)
+    add_surface_cli_args(parser)
+    add_tune_cli_args(parser)
+    add_imu_lock_cli_args(parser)
+    parser.add_argument(
+        "--surface",
+        action="store_true",
+        help="Debug only: green monitor overlay on scene preview (off by default)",
+    )
     args = parser.parse_args()
+    if args.shake:
+        apply_shake_preset(args)
 
     ip = args.ip or discover_ip(args.discover_seconds)
     if not ip:
@@ -340,27 +429,61 @@ def main() -> int:
         return 1
 
     K, D = reader.calibration if reader.calibration else (None, None)
-    detector = make_aruco_detector()
+    imu_cfg = imu_config_from_args(args)
+    if imu_cfg.enabled and K is None:
+        print("[neon_monitor_gaze] No scene calibration — IMU assist disabled.", file=sys.stderr)
+        imu_cfg.enabled = False
 
-    # --- fullscreen window ---
+    detector = make_aruco_detector(stable=not args.no_stabilize)
+    # When imu-lock handles head motion, keep marker tracker visual-only (no second IMU layer).
+    tracker_imu = ImuAssistConfig(enabled=False) if args.imu_lock else imu_cfg
+    tracker = MarkerTracker(
+        alpha=args.smooth_alpha,
+        hold_frames=0 if args.no_stabilize else args.hold_frames,
+        min_hits=1,
+        allowed_ids=set(CORNER_IDS),
+        imu=tracker_imu,
+    )
+    tune_panel = ArucoTunePanel.from_args(args, show_homography=True) if args.tune else None
+    homography_hold = args.homography_hold
+    h_lock = (
+        ImuHomographyLock(
+            settle_gyro_deg_s=args.settle_gyro,
+            settle_frames_required=args.settle_frames,
+            imu_gain=imu_cfg.gain,
+        )
+        if args.imu_lock
+        else None
+    )
+    h_mode = HomographyMode.SEARCHING
+
+    # --- monitor window (ArUco corners + gaze cursor) ---
     win = "NeonMonitorGaze"
     cv2.namedWindow(win, cv2.WINDOW_NORMAL)
-    cv2.setWindowProperty(win, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+    if args.fullscreen:
+        cv2.setWindowProperty(win, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+    else:
+        cv2.resizeWindow(win, args.width, args.height)
 
-    # Detect screen size from a temporary show
     cv2.imshow(win, np.zeros((100, 100, 3), dtype=np.uint8))
     cv2.waitKey(1)
-    rect = cv2.getWindowImageRect(win)
-    W, H = rect[2], rect[3]
-    if W <= 0 or H <= 0:
-        W, H = 1920, 1080  # sensible fallback
+    W, H = window_client_size(win, (args.width, args.height))
+    last_size = (W, H)
 
+    scene_preview = not args.no_scene_preview
+    scene_win = "NeonSceneArUco"
+    if scene_preview:
+        cv2.namedWindow(scene_win, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(scene_win, args.scene_width, args.scene_height)
+
+    marker_size = args.marker_size or default_corner_marker_size(W, H)
     marker_canvas, corners_monitor = build_marker_image(
-        W, H, args.marker_size, args.margin
+        W, H, marker_size, args.margin
     )
 
     H_mat: Optional[np.ndarray] = None
     last_homography_time = 0.0
+    last_good_homography_time = 0.0
     trail: list[tuple[float, float]] = []
     A_corr: Optional[np.ndarray] = None
     b_corr: Optional[np.ndarray] = None
@@ -372,33 +495,133 @@ def main() -> int:
     cal_samples: list[tuple[float, float]] = []
     cal_observed: list[tuple[float, float]] = []
     cal_status = "Press C to run calibration"
+    smooth_gaze: Optional[tuple[float, float]] = None
+    using_imu_h = False
 
+    stabilize_note = "" if args.imu_lock else f"  stabilize={'off' if args.no_stabilize else 'on'}"
     print(
-        f"[neon_monitor_gaze] fullscreen {W}×{H}, markers at corners.\n"
-        f"  Press Q or Esc to quit."
+        f"[neon_monitor_gaze] {W}×{H}  scene={'on' if scene_preview else 'off'}\n"
+        f"  1) Hold still until status shows H: locked\n"
+        f"  2) Move head — status H: IMU, watch red cursor on monitor\n"
+        f"  3) Hold still again to re-snap.  C=grid cal  L=reset lock  Q=quit\n"
+        f"  imu_lock={'on' if args.imu_lock else 'off'}  imu={'on' if imu_cfg.enabled else 'off'}"
+        f"{stabilize_note}\n"
+        f"  Extra: --tune --surface --shake"
     )
 
     while True:
         now = time.monotonic()
+        tune = (
+            tune_panel.apply(tracker, imu_cfg)
+            if tune_panel is not None
+            else None
+        )
+        stabilize_on = tune.stabilize if tune is not None else not args.no_stabilize
+        surface_alpha = tune.surface_alpha if tune is not None else args.surface_alpha
+        highlight_surface = (
+            tune.surface_highlight if tune is not None else (args.surface and not args.no_surface_highlight)
+        )
+        if tune is not None:
+            homography_hold = tune.homography_hold
+        smooth_alpha = tune.smooth_alpha if tune is not None else args.smooth_alpha
+
+        current = window_client_size(win, last_size)
+        if current != last_size:
+            W, H = current
+            last_size = (W, H)
+            marker_canvas, corners_monitor = build_marker_image(
+                W, H, args.marker_size or default_corner_marker_size(W, H), args.margin
+            )
+            cal_targets = grid_points(args.cal_cols, args.cal_rows, W, H)
+            H_mat = None
+            if h_lock is not None:
+                h_lock.reset()
+            trail = []
+            A_corr, b_corr = None, None
+            print(f"[neon_monitor_gaze] resized to {W}×{H}")
+
         frame_data = reader.latest
 
         display = marker_canvas.copy()
+        overlay_state = None
+        raw_corners: list = []
+        raw_ids = None
 
-        # --- recompute homography periodically ---
-        if (
-            frame_data is not None
-            and now - last_homography_time > args.homography_interval
-        ):
-            new_H = detect_and_compute_homography(
-                frame_data.bgr, detector, corners_monitor, K, D
+        if frame_data is not None:
+            raw_corners, raw_ids, overlay_state = run_aruco_detection(
+                frame_data.bgr,
+                detector,
+                tracker if stabilize_on else None,
+                allowed_ids=set(CORNER_IDS),
+                stabilize_on=stabilize_on,
+                K=K,
+                D=D,
+                imu_quat_xyzw=frame_data.imu_quat,
+                gyro_mag_deg_s=frame_data.imu_gyro_mag,
+                imu_cfg=imu_cfg,
             )
-            if new_H is not None:
-                H_mat = new_H
-                last_homography_time = now
+
+            if h_lock is not None:
+                h_corners, h_ids = detection_corners_for_homography(
+                    raw_corners, raw_ids, tracker if stabilize_on else None,
+                    stabilize_on=stabilize_on,
+                )
+                using_imu_h = False
+            elif stabilize_on and tracker is not None:
+                h_corners, h_ids = tracker.all_tracked_detections()
+                using_imu_h = imu_cfg.enabled and len(tracker.predicted_ids()) > 0
+            else:
+                h_corners = raw_corners or []
+                h_ids = raw_ids if raw_ids is not None else np.array([], dtype=np.int32)
+                using_imu_h = False
+
+            if h_lock is not None:
+                h_lock.imu_gain = imu_cfg.gain
+                H_mat = h_lock.update(
+                    h_corners=h_corners,
+                    h_ids=h_ids,
+                    corners_monitor=corners_monitor,
+                    K=K,
+                    D=D,
+                    undistort_fn=undistort_point,
+                    imu_quat_xyzw=frame_data.imu_quat,
+                    gyro_mag_deg_s=frame_data.imu_gyro_mag,
+                    imu_enabled=imu_cfg.enabled,
+                    gyro_max_deg_s=imu_cfg.gyro_max_deg_s,
+                    smooth_alpha=smooth_alpha,
+                    now=now,
+                )
+                h_mode = h_lock.mode
+                if H_mat is not None:
+                    last_good_homography_time = now
+                    if h_mode == HomographyMode.LOCKED:
+                        last_homography_time = now
+            elif now - last_homography_time > args.homography_interval:
+                new_H = homography_from_detections(
+                    h_corners, h_ids, corners_monitor, K, D
+                )
+                if new_H is not None:
+                    if not stabilize_on:
+                        H_mat = new_H
+                    else:
+                        H_mat = smooth_homography(H_mat, new_H, smooth_alpha)
+                    last_homography_time = now
+                    last_good_homography_time = now
+                elif (
+                    stabilize_on
+                    and H_mat is not None
+                    and now - last_good_homography_time > homography_hold
+                ):
+                    H_mat = None
 
         mapped_point: Optional[tuple[int, int]] = None
         # --- map gaze and draw ---
-        if frame_data is not None and frame_data.worn and H_mat is not None:
+        if (
+            frame_data is not None
+            and frame_data.worn
+            and H_mat is not None
+            and np.all(np.isfinite(H_mat))
+        ):
             gx, gy = frame_data.gaze_x, frame_data.gaze_y
             if K is not None and D is not None:
                 gx, gy = undistort_point(gx, gy, K, D)
@@ -407,7 +630,11 @@ def main() -> int:
             if A_corr is not None and b_corr is not None:
                 v = A_corr @ np.array([mx, my], dtype=float) + b_corr
                 mx, my = float(v[0]), float(v[1])
-            mx, my = int(round(mx)), int(round(my))
+            if not stabilize_on:
+                smooth_gaze = (mx, my)
+            else:
+                smooth_gaze = smooth_point(smooth_gaze, (mx, my), smooth_alpha)
+            mx, my = int(round(smooth_gaze[0])), int(round(smooth_gaze[1]))
             mapped_point = (mx, my)
 
             # trail
@@ -433,19 +660,9 @@ def main() -> int:
             cv2.circle(display, (mx, my), 4, (0, 0, 255), -1, cv2.LINE_AA)
 
         elif H_mat is None:
-            cv2.putText(
-                display,
-                "Searching for ArUco markers...",
-                (W // 2 - 280, H // 2),
-                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (80, 80, 80), 2, cv2.LINE_AA,
-            )
+            pass
         elif frame_data is not None and not frame_data.worn:
-            cv2.putText(
-                display,
-                "Glasses not worn",
-                (W // 2 - 150, H // 2),
-                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (80, 80, 200), 2, cv2.LINE_AA,
-            )
+            pass
 
         if cal_mode and H_mat is not None:
             tx, ty = cal_targets[cal_idx]
@@ -479,16 +696,63 @@ def main() -> int:
 
         # HUD
         cal_str = "cal: K+D" if K is not None else "cal: NONE"
-        h_str   = "H: OK" if H_mat is not None else "H: searching"
+        if h_lock is not None:
+            if H_mat is None:
+                h_str = "H: searching (hold still)"
+            elif h_mode == HomographyMode.IMU:
+                h_str = "H: IMU"
+            elif h_mode == HomographyMode.LOCKED:
+                h_str = "H: locked"
+            else:
+                h_str = "H: searching"
+        elif H_mat is None:
+            h_str = "H: searching"
+        elif now - last_homography_time <= args.homography_interval * 2:
+            h_str = "H: OK" + ("+IMU" if using_imu_h else "")
+        else:
+            hold_left = max(0.0, homography_hold - (now - last_good_homography_time))
+            h_str = f"H: hold ({hold_left:.1f}s)"
         corr_str = "corr: ON" if A_corr is not None else "corr: OFF"
-        cv2.putText(display, f"{cal_str}  {h_str}  {corr_str}",
-                    (12, H - 12),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (120, 120, 120), 1, cv2.LINE_AA)
-        cv2.putText(display, cal_status, (12, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, (90, 90, 90), 2, cv2.LINE_AA)
+        status_line = f"{cal_status}   {cal_str}   {h_str}   {corr_str}"
+        cv2.putText(display, status_line, (12, H - 12),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 100, 100), 1, cv2.LINE_AA)
+
+        if scene_preview and frame_data is not None and overlay_state is not None:
+            scene_view = frame_data.bgr.copy()
+            draw_aruco_overlay(
+                scene_view,
+                overlay_state,
+                raw_corners=raw_corners,
+                raw_ids=raw_ids,
+                tracker=tracker if stabilize_on else None,
+                stabilize_on=stabilize_on,
+                highlight_surface=highlight_surface,
+                surface_alpha=surface_alpha,
+                surface_tracker=None,
+                imu_quat_xyzw=frame_data.imu_quat,
+                K=K,
+                D=D,
+                imu_cfg=imu_cfg,
+                gyro_mag_deg_s=frame_data.imu_gyro_mag,
+            )
+            if tune_panel is not None and tune is not None:
+                tune_panel.draw_hud(scene_view, tune)
+            if frame_data.worn:
+                cv2.drawMarker(
+                    scene_view,
+                    (int(round(frame_data.gaze_x)), int(round(frame_data.gaze_y))),
+                    (0, 0, 255),
+                    markerType=cv2.MARKER_CROSS,
+                    markerSize=20,
+                    thickness=2,
+                    line_type=cv2.LINE_AA,
+                )
+            cv2.imshow(scene_win, scene_view)
 
         cv2.imshow(win, display)
         key = cv2.waitKey(16) & 0xFF
+        if key in (ord("p"), ord("P")) and tune_panel is not None:
+            tune_panel.print_cli(tune)
         if key in (ord("q"), ord("Q"), 27):  # Q or Esc
             break
         if key in (ord("c"), ord("C")):
@@ -505,6 +769,10 @@ def main() -> int:
         if key in (ord("r"), ord("R")):
             A_corr, b_corr = None, None
             cal_status = "Calibration reset"
+        if key in (ord("l"), ord("L")) and h_lock is not None:
+            h_lock.reset()
+            H_mat = None
+            cal_status = "H lock reset — hold still to re-lock"
 
         if reader.error:
             print(f"Reader error: {reader.error}", file=sys.stderr)

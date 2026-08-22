@@ -1,0 +1,14 @@
+[project]
+name = "gazegait-00-pulling"
+version = "0.1.0"
+description = "gazeGait 00_pulling — ADB device picker (Quest / Neon) and later pull."
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    # 6.10+ Qt6Core needs icuuc.dll but the Windows wheel does not ship it
+    # (ImportError: DLL load failed while importing QtCore).
+    "PySide6>=6.7,<6.10",
+]
+
+[tool.uv]
+package = false
+python-preference = "only-managed"

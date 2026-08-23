@@ -41,7 +41,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from _paths import CLEANED, add_bout_args, resolve_bout, stage_dir
+from _paths import CLEANED, NEON_EVENT_CSVS, add_bout_args, resolve_bout, stage_dir
 
 TS_COL = "t_utc_ns"
 SEQ_COL = "PacketCounter"
@@ -292,7 +292,14 @@ def run_session(
     gaze_path = session_dir / NEON_GAZE
     if copy_gaze and gaze_path.is_file():
         shutil.copy2(gaze_path, out_dir / NEON_GAZE)
-        print(f"Copied {NEON_GAZE} (unchanged)")
+        extras = []
+        for name in NEON_EVENT_CSVS:
+            src = session_dir / name
+            if src.is_file():
+                shutil.copy2(src, out_dir / name)
+                extras.append(name)
+        extra = f" + {', '.join(extras)}" if extras else ""
+        print(f"Copied {NEON_GAZE} (unchanged){extra}")
 
     print(f"Output session: {out_dir}")
     print(

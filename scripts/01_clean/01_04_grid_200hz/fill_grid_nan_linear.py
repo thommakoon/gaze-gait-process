@@ -45,7 +45,7 @@ def fill_frame(df: pd.DataFrame, ts_col: str) -> tuple[pd.DataFrame, int, int]:
     nan_before = 0
     nan_after = 0
     for col in value_cols:
-        if not np.issubdtype(out[col].dtype, np.number):
+        if col == "blink id" or not np.issubdtype(out[col].dtype, np.number):
             continue
         s = out[col].astype(float)
         nan_before += int(s.isna().sum())

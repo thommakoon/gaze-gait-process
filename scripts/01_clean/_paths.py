@@ -52,6 +52,10 @@ RAW_MOTOROLA = "Motorola"
 RAW_QUEST = "Quest"
 RAW_OPENEYE = "OpenEye"
 
+# Neon extras from neon_export/ (copied 00_raw → 01_corrected → 02_cleaned;
+# blinks/events stay as event tables; 3d_eye_states is interpolated at 03_grid).
+NEON_EVENT_CSVS = ("blinks.csv", "events.csv", "3d_eye_states.csv")
+
 BOUTS = ("Ring", "Rectangle", "PracticeRing", "PracticeRectangle")
 WALKING_BOUTS = ("Ring", "Rectangle")
 PRACTICE_BOUTS = ("PracticeRing", "PracticeRectangle")

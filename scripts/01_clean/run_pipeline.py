@@ -4,7 +4,7 @@
 Chains the stage scripts in order:
 
     check  coverage pre                 (same session: Quest vs Neon vs feet)
-    01_01  neon_raw_to_csv + convert_quest_to_pc_ns
+    01_01  neon_raw_to_csv + blink/event/eye_state + convert_quest_to_pc_ns
     01_02  correct_imu_t_utc          (walking only)
     01_03  drop_imu_bad_dt            (walking only)
     01_04  grid_utc_200hz  (+ fill)   (walking only)
@@ -81,6 +81,7 @@ def run_one(flags: list[str], args: argparse.Namespace, *, bout: Path) -> None:
     if not args.skip_coverage:
         run_step("check_coverage.py", flags + ["--stage", "pre"])
     run_step("01_01_export/neon_raw_to_csv.py", flags)
+    run_step("neon_export/export_blink_event_eye_state.py", flags)
     run_step("01_01_export/convert_quest_to_pc_ns.py", flags)
     # Practice = standing: no foot IMU. Walking Ring/Rectangle still need LF/RF.
     if is_practice_bout(bout.parent.name):

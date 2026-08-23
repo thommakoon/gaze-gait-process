@@ -8,6 +8,7 @@ Foot IMU (for lin / imu_gait_analysis):
 Aligned 200 Hz grid (copied from ``data/03_grid_200hz/<session>/``):
     ``gaze_200hz.csv``, ``head_200hz.csv``, ``grid_200hz_meta.csv``
     ``LF_imu_fused_*_200hz.csv``, ``RF_imu_fused_*_200hz.csv`` (shared ``t_utc_ns``)
+    ``blinks.csv``, ``events.csv``, ``eye_state_200hz.csv`` when present
 
 Head orientation (derived from ``head_200hz.csv`` accel + gyro):
     ``head_madgwick_200hz.csv`` — Madgwick 6-DOF roll/pitch/yaw at 200 Hz
@@ -96,6 +97,11 @@ GRID_COMPANION_FILES = (
     "gaze_200hz.csv",
     "head_200hz.csv",
     "grid_200hz_meta.csv",
+)
+GRID_OPTIONAL_FILES = (
+    "blinks.csv",
+    "events.csv",
+    "eye_state_200hz.csv",
 )
 GRID_COMPANION_GLOBS = (
     "LF_imu_fused_*_200hz.csv",
@@ -218,6 +224,12 @@ def copy_grid_bundle(grid_dir: Path, out_dir: Path) -> list[str]:
             raise FileNotFoundError(f"Missing grid file: {src}")
         shutil.copy2(src, out_dir / name)
         copied.append(name)
+
+    for name in GRID_OPTIONAL_FILES:
+        src = grid_dir / name
+        if src.is_file():
+            shutil.copy2(src, out_dir / name)
+            copied.append(name)
 
     for pattern in GRID_COMPANION_GLOBS:
         matches = sorted(grid_dir.glob(pattern))

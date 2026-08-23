@@ -167,7 +167,7 @@ data/participants/participantN/
 
 **Quest** — one JSON per logged stream (`streamEye` / `streamHead` / `streamHand`). The cleaner keeps the stream that matches the interaction. Envelope fields include `sub_num`, `subsub_num`, `condition`, `ring_sets`, `data[]` at 100 Hz (cursor, hits, dwell, pinch).
 
-**Motorola** — dated Neon Companion export (`info.json`, `gaze ps1.raw`, `imu ps1.raw`, scene video, …) plus PC (or URP) foot files `LF_imu_fused_*.csv` / `RF_imu_fused_*.csv`. Extra aborted takes should be parked in a `_` subfolder so coverage sees **one** Neon and **one** IMU.
+**Motorola** — dated Neon Companion export (`info.json`, `gaze ps1.raw`, `imu ps1.raw`, blinks/events/eye-state binaries, scene video, …) plus PC (or URP) foot files `LF_imu_fused_*.csv` / `RF_imu_fused_*.csv`. After clean, the same folder has `blinks.csv`, `events.csv`, `3d_eye_states.csv`. Extra aborted takes should be parked in a `_` subfolder so coverage sees **one** Neon and **one** IMU.
 
 **OpenEye** — GUI writes here **during** the session:
 
@@ -181,7 +181,7 @@ data/participants/participantN/
 
 ### Walking grid (`03_grid_200hz`)
 
-All streams resampled onto one 200 Hz UTC/PC axis. `grid_200hz_meta.csv` has valid fractions (`quest_valid_frac`, gaze, LF, RF). A low Quest fraction with gaze/LF ≈ 1.0 usually means Neon/IMU ran longer than the Fitts block (padding), not a missing overlap. Coverage **fails** a stream if its fraction is &lt; 0.5; Quest &lt; 0.5 **warns**.
+All streams resampled onto one 200 Hz UTC/PC axis. `gaze_200hz.csv` includes `blink id` when Neon blinks were exported. `grid_200hz_meta.csv` has valid fractions (`quest_valid_frac`, gaze, eye state, LF, RF). A low Quest fraction with gaze/LF ≈ 1.0 usually means Neon/IMU ran longer than the Fitts block (padding), not a missing overlap. Coverage **fails** a stream if its fraction is &lt; 0.5; Quest &lt; 0.5 **warns**.
 
 Practice standing **stops after export**: no foot grid, so Neon I-VT while standing is **not** on the same 200 Hz product as walking.
 
@@ -260,7 +260,8 @@ What `run_pipeline.py` actually runs:
 |-------|--------|------------------------|-------------------|
 | pre | `check_coverage.py --stage pre` | extra takes, `ring_sets`, PC-clock overlap ≥ 8 s | same, feet optional |
 | 01a | `01_01_export/neon_raw_to_csv.py` | Neon raw → `gaze.csv` / `imu.csv` on PC clock | yes |
-| 01b | `01_01_export/convert_quest_to_pc_ns.py` | Quest JSON → `quest_100hz.csv` | yes |
+| 01b | `neon_export/export_blink_event_eye_state.py` | Neon `blinks.csv`, `events.csv`, `3d_eye_states.csv` + `blink id` on gaze | yes |
+| 01c | `01_01_export/convert_quest_to_pc_ns.py` | Quest JSON → `quest_100hz.csv` | yes |
 | 02 | `01_02_correct_utc/correct_imu_t_utc.py` | Hampel-fix foot receive times | skip |
 | 03 | `01_03_drop_dt/drop_imu_bad_dt.py` | drop bad IMU spacing | skip |
 | 04 | `01_04_grid_200hz/grid_utc_200hz.py` | 200 Hz shared grid | skip |

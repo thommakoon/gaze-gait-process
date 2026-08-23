@@ -40,6 +40,7 @@ import pandas as pd
 
 from _paths import (
     CORRECTED,
+    NEON_EVENT_CSVS,
     RAW_MOTOROLA,
     add_bout_args,
     raw_device_dir,
@@ -297,7 +298,14 @@ def run(
         exp = export_dir if export_dir is not None else find_export_dir(session_dir)
         shutil.copy2(exp / NEON_GAZE, out_dir / NEON_GAZE)
         shutil.copy2(exp / NEON_IMU, out_dir / OUT_HEAD)
-        print(f"Copied {NEON_GAZE}, {OUT_HEAD} from {exp.name}")
+        extras = []
+        for name in NEON_EVENT_CSVS:
+            src = exp / name
+            if src.is_file():
+                shutil.copy2(src, out_dir / name)
+                extras.append(name)
+        extra = f", {', '.join(extras)}" if extras else ""
+        print(f"Copied {NEON_GAZE}, {OUT_HEAD}{extra} from {exp.name}")
 
     print(f"Wrote {out_dir / lf_path.name}")
     print(f"Wrote {out_dir / rf_path.name}")

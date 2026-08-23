@@ -16,6 +16,7 @@ scripts/01_clean/
   _paths.py / _bootstrap.py / run_pipeline.py
   01_00_sync/           # PC clock offsets (sync.json)
   01_01_export/         # Neon raw → csv, Quest JSON → quest_100hz.csv
+  neon_export/          # blinks / events / 3d_eye_states (run after gaze export)
   01_02_correct_utc/    # Hampel fix foot receive timestamps
   01_03_drop_dt/        # drop bad IMU spacing
   01_04_grid_200hz/     # shared 200 Hz grid (+ optional NaN fill)
@@ -78,7 +79,8 @@ Every stage script also accepts `--bout-dir <path>`.
 | 00 | `01_00_sync/` | `compute_sync_json.py` | `sync.json` (usually already written by OpenEye GUI) |
 | chk | (root) | `check_coverage.py --stage pre` | `00_raw/coverage_check.json` — same session (Quest vs Neon vs feet) |
 | 01a | `01_01_export/` | `neon_raw_to_csv.py` | Motorola `gaze.csv`, `imu.csv` (PC clock) |
-| 01b | `01_01_export/` | `convert_quest_to_pc_ns.py` | `00_raw/Quest/quest_100hz.csv` |
+| 01b | `neon_export/` | `export_blink_event_eye_state.py` | `blinks.csv`, `events.csv`, `3d_eye_states.csv` + `blink id` on gaze |
+| 01c | `01_01_export/` | `convert_quest_to_pc_ns.py` | `00_raw/Quest/quest_100hz.csv` |
 | 02 | `01_02_correct_utc/` | `correct_imu_t_utc.py` | `01_corrected/` |
 | 03 | `01_03_drop_dt/` | `drop_imu_bad_dt.py` | `02_cleaned/` |
 | 04 | `01_04_grid_200hz/` | `grid_utc_200hz.py` | `03_grid_200hz/` |
@@ -99,7 +101,8 @@ uv run python 01_05_gait_xsens/format_foot_xsens_csv.py --participant 11 --bout 
 Step 5 output `05_gait_xsens/`:
 
 - `LF.csv`, `RF.csv` — Xsens format for imu_gait_analysis
-- `gaze_200hz.csv`, `head_200hz.csv`, `grid_200hz_meta.csv`
+- `gaze_200hz.csv` (includes `blink id`), `head_200hz.csv`, `grid_200hz_meta.csv`
+- `blinks.csv`, `events.csv`, `eye_state_200hz.csv` when Neon extras were exported
 - `head_madgwick_200hz.csv`
 
 ## Plots / QC (same step number as the stage they check)

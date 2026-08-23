@@ -33,6 +33,7 @@ from _bootstrap import ensure_clean_path
 ensure_clean_path()
 
 import argparse
+import shutil
 import sys
 from pathlib import Path
 
@@ -59,6 +60,10 @@ GAZE_NAME = "gaze.csv"
 HEAD_NAME = "head.csv"
 QUEST_NAME = "quest_100hz.csv"
 QUEST_OUT = "quest_200hz.csv"
+BLINKS_NAME = "blinks.csv"
+EVENTS_NAME = "events.csv"
+EYE_STATE_NAME = "3d_eye_states.csv"
+EYE_STATE_OUT = "eye_state_200hz.csv"
 
 FOOT_VALUE_COLS = [
     "Acc_X",
@@ -160,6 +165,19 @@ def interp_stream(
     return pd.DataFrame(out)
 
 
+def assign_blink_id(t_grid: np.ndarray, blinks: pd.DataFrame) -> np.ndarray:
+    """Mark grid samples that fall inside a Neon blink interval."""
+    out = np.full(len(t_grid), np.nan)
+    if blinks.empty:
+        return out
+    starts = blinks["start timestamp [ns]"].astype(np.int64).to_numpy()
+    ends = blinks["end timestamp [ns]"].astype(np.int64).to_numpy()
+    ids = blinks["blink id"].to_numpy()
+    for bid, a, b in zip(ids, starts, ends):
+        out[(t_grid >= a) & (t_grid <= b)] = bid
+    return out
+
+
 def build_grid(t_start: int, t_end: int) -> np.ndarray:
     if t_end < t_start:
         raise ValueError(f"Empty overlap: t_start={t_start} t_end={t_end}")
@@ -232,6 +250,31 @@ def run_session(
     rf_out = out_dir / rf_path.name.replace(".csv", "_200hz.csv")
     lf_g.to_csv(lf_out, index=False)
     rf_g.to_csv(rf_out, index=False)
+    blinks_path = session_dir / BLINKS_NAME
+    if blinks_path.is_file():
+        blinks = pd.read_csv(blinks_path)
+        gaze_g["blink id"] = assign_blink_id(t_grid, blinks)
+        shutil.copy2(blinks_path, out_dir / BLINKS_NAME)
+        n_blink = int(gaze_g["blink id"].notna().sum())
+        print(f"Blinks: {len(blinks)} events, {n_blink}/{n_grid} grid samples marked")
+    events_path = session_dir / EVENTS_NAME
+    if events_path.is_file():
+        shutil.copy2(events_path, out_dir / EVENTS_NAME)
+
+    eye_g = None
+    eye_cols: list[str] = []
+    eye_src_rows = 0
+    eye_path = session_dir / EYE_STATE_NAME
+    if eye_path.is_file():
+        eye = pd.read_csv(eye_path)
+        eye_src_rows = len(eye)
+        if NEON_TS not in eye.columns:
+            raise ValueError(f"{EYE_STATE_NAME}: missing {NEON_TS}")
+        eye_skip = {NEON_TS, "recording id"}
+        eye_cols = [c for c in eye.select_dtypes(include=[np.number]).columns if c not in eye_skip]
+        eye_g = interp_stream(eye, NEON_TS, eye_cols, t_grid)
+        eye_g.to_csv(out_dir / EYE_STATE_OUT, index=False)
+
     head_g.to_csv(out_dir / "head_200hz.csv", index=False)
     gaze_g.to_csv(out_dir / "gaze_200hz.csv", index=False)
 
@@ -259,11 +302,13 @@ def run_session(
         "rf_valid_frac": valid_frac(rf_g, FOOT_VALUE_COLS),
         "head_valid_frac": valid_frac(head_g, head_cols),
         "gaze_valid_frac": valid_frac(gaze_g, gaze_cols),
+        "eye_state_valid_frac": valid_frac(eye_g, eye_cols) if eye_g is not None else np.nan,
         "quest_valid_frac": valid_frac(quest_g, quest_cols) if quest_g is not None else np.nan,
         "lf_src_rows": len(lf),
         "rf_src_rows": len(rf),
         "head_src_rows": len(head),
         "gaze_src_rows": len(gaze),
+        "eye_state_src_rows": eye_src_rows,
         "quest_src_rows": quest_src_rows,
         "quest_csv": str(quest_path) if quest_path is not None else "",
     }
@@ -275,12 +320,14 @@ def run_session(
     print(f"Grid: {n_grid} samples @ {FS_HZ} Hz (dt={DT_NS/1e6:.3f} ms)")
     q_frac = meta.quest_valid_frac.iloc[0]
     q_str = f"{q_frac:.3f}" if pd.notna(q_frac) else "n/a"
+    e_frac = meta.eye_state_valid_frac.iloc[0]
+    e_str = f"{e_frac:.3f}" if pd.notna(e_frac) else "n/a"
     print(
         f"Valid fraction: LF {meta.lf_valid_frac.iloc[0]:.3f}  "
         f"RF {meta.rf_valid_frac.iloc[0]:.3f}  "
         f"head {meta.head_valid_frac.iloc[0]:.3f}  "
         f"gaze {meta.gaze_valid_frac.iloc[0]:.3f}  "
-        f"quest {q_str}"
+        f"eye {e_str}  quest {q_str}"
     )
     if quest_path is not None and (pd.isna(q_frac) or q_frac == 0.0):
         print(

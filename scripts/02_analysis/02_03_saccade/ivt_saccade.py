@@ -151,17 +151,24 @@ def compute_ivt_intervals(
     threshold_px_s: float,
     *,
     min_duration_ms: float = 20.0,
+    still: bool = False,
 ) -> list[tuple[float, float, float]]:
-    """Return list of (onset_s, end_s, peak_speed_px_s) above threshold."""
+    """Return list of (onset_s, end_s, peak_speed) I-VT runs.
+
+    Movement: speed > threshold. Still / fixation: finite speed ≤ threshold.
+    """
     min_duration_s = max(0.0, min_duration_ms) / 1000.0
     intervals: list[tuple[float, float, float]] = []
     start_idx: int | None = None
 
     for i, speed in enumerate(speed_px_s):
-        above = math.isfinite(speed) and speed > threshold_px_s
-        if above and start_idx is None:
+        if still:
+            active = math.isfinite(speed) and speed <= threshold_px_s
+        else:
+            active = math.isfinite(speed) and speed > threshold_px_s
+        if active and start_idx is None:
             start_idx = i
-        elif not above and start_idx is not None:
+        elif not active and start_idx is not None:
             end_idx = max(start_idx, i - 1)
             onset = float(times_s[start_idx])
             end = float(times_s[end_idx])
@@ -181,6 +188,23 @@ def compute_ivt_intervals(
             intervals.append((onset, end, peak))
 
     return intervals
+
+
+def compute_ivt_still_intervals(
+    times_s: np.ndarray,
+    speed_px_s: np.ndarray,
+    threshold_px_s: float,
+    *,
+    min_duration_ms: float = 80.0,
+) -> list[tuple[float, float, float]]:
+    """Fixation / hold intervals: finite speed ≤ threshold for ≥ min duration."""
+    return compute_ivt_intervals(
+        times_s,
+        speed_px_s,
+        threshold_px_s,
+        min_duration_ms=min_duration_ms,
+        still=True,
+    )
 
 
 def assign_stride_phase(onset_s: float, strides: list[LfStride]) -> tuple[int | None, float | None]:

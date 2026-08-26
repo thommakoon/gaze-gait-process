@@ -31,6 +31,7 @@ import numpy as np
 import pandas as pd
 
 from _paths import INTERACTIONS, STAGE_DIRS, add_bout_args, bout_labels, participant_dir, resolve_bout
+from fitts_iso import drop_id_openers, drop_training_and_id_openers
 from gaze_target_stride import find_quest_jsons
 
 OUT_SUBDIR = "fitts_params"
@@ -74,6 +75,7 @@ def load_fitts_selections(paths: list[Path]) -> pd.DataFrame:
                     "ring_index": sel.get("ring_index"),
                     "ring_name": sel.get("ring_name"),
                     "is_training": bool(sel.get("is_training", False)),
+                    "opening_selection": bool(sel.get("opening_selection", False)),
                     "selection_unix_ms": float(ms),
                 }
             )
@@ -132,8 +134,10 @@ def run_bout(
     if df.empty:
         raise ValueError(f"No selections in {bout}")
 
-    if args.exclude_training and "is_training" in df.columns:
-        df = df[df["is_training"] == False].reset_index(drop=True)  # noqa: E712
+    if args.exclude_training:
+        df = drop_training_and_id_openers(df)
+    else:
+        df = drop_id_openers(df)
 
     if args.success_only:
         df_out = df[df["success"] == True].reset_index(drop=True)  # noqa: E712
@@ -170,7 +174,7 @@ def parse_args() -> argparse.Namespace:
         "--exclude-training",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Drop training-ring selections (default: exclude)",
+        help="Drop training-ring selections (default: exclude). First-of-ID-lap is always dropped.",
     )
     parser.add_argument(
         "--all-interactions",

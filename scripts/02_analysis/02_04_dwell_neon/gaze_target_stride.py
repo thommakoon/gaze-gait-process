@@ -53,6 +53,7 @@ import numpy as np
 import pandas as pd
 
 from _paths import STAGE_DIRS, add_bout_args, bout_labels, resolve_bout
+from fitts_iso import drop_training_and_id_openers
 from ivt_saccade import LfStride, assign_stride_phase
 
 GRID_META = "grid_200hz_meta.csv"
@@ -86,6 +87,9 @@ def load_selections(
     """Flatten ``selections[]`` from one or more Quest trial JSONs.
 
     ``event_type`` in {"any", "dwell", "pinch"} filters ``selection.event_type``.
+    Drops training and the first target of each A×W ID lap (ring first-dot,
+    rectangle opening L). Failed openers still occupy that slot so the next
+    success is not dropped in their place.
     """
     rows: list[dict] = []
     for path in paths:
@@ -94,8 +98,6 @@ def load_selections(
         for sel in trial.get("selections", []):
             et = sel.get("event_type", "")
             if event_type != "any" and et != event_type:
-                continue
-            if success_only and not sel.get("success", False):
                 continue
             ms = sel.get("selection_unix_ms")
             if ms is None:
@@ -113,11 +115,17 @@ def load_selections(
                     "end_num": sel.get("end_num"),
                     "movement_time_s": sel.get("movement_time_s"),
                     "selection_unix_ms": float(ms),
+                    "ring_index": sel.get("ring_index"),
+                    "is_training": bool(sel.get("is_training", False)),
+                    "opening_selection": bool(sel.get("opening_selection", False)),
                 }
             )
     df = pd.DataFrame(rows)
-    if not df.empty:
-        df = df.sort_values("selection_unix_ms").reset_index(drop=True)
+    if df.empty:
+        return df
+    df = drop_training_and_id_openers(df)
+    if success_only:
+        df = df[df["success"] == True].reset_index(drop=True)  # noqa: E712
     return df
 
 

@@ -32,7 +32,8 @@ from pathlib import Path
 
 import matplotlib
 
-matplotlib.use("Agg")
+if __name__ == "__main__":
+    matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
 from matplotlib.patches import Circle, Rectangle
@@ -145,7 +146,13 @@ def load_trial(qpath: Path) -> tuple[dict, pd.DataFrame, pd.DataFrame]:
             "step_num": fr.get("step_num"),
             "dwell_s": float(fr.get("current_dwell_time") or 0.0),
             "active_cursor": fr.get("active_cursor") or "",
+            "hit_target": fr.get("hit_target") or "",
+            "eye_hit_target": fr.get("eye_hit_target") or "",
+            "head_hit_target": fr.get("head_hit_target") or "",
+            "hand_hit_target": fr.get("hand_hit_target") or "",
         }
+        dist = fr.get("cursor_angular_distance")
+        rec["angle_deg"] = float(dist) if dist is not None else np.nan
         tgt = _xyz(fr.get("target_position"))
         rec["target_wx"] = tgt[0]
         rec["target_wy"] = tgt[1]
@@ -158,6 +165,8 @@ def load_trial(qpath: Path) -> tuple[dict, pd.DataFrame, pd.DataFrame]:
             rec[f"{name}_wall_valid"] = bool(fr.get(f"{name}_wall_valid"))
             wx = fr.get(f"{name}_wall_x")
             wy = fr.get(f"{name}_wall_y")
+            rec[f"{name}_wall_x"] = wx
+            rec[f"{name}_wall_y"] = wy
             if rec[f"{name}_wall_valid"] and wx is not None and wy is not None:
                 rec[f"{name}_x"] = float(wx)
                 rec[f"{name}_y"] = float(wy)
@@ -301,6 +310,208 @@ def merge_targets(geom: list[dict], obs: list[dict]) -> list[dict]:
         else:
             by_id[t["end_num"]] = t
     return [by_id[k] for k in sorted(by_id)]
+
+
+def drawn_layout_windows(trial: dict, frames: pd.DataFrame, selections: pd.DataFrame) -> list[dict]:
+    """Same ring/rect discs the wall replay draws: layout geom + observed target_position."""
+    layout_default = str((trial.get("fitts_layout") or {}).get("layout_mode") or trial.get("layout_mode") or "ring")
+    height_default = float((trial.get("fitts_layout") or {}).get("height_m") or RECT_HEIGHT_M)
+    out: list[dict] = []
+    for win in layout_windows(selections, frames):
+        mode = win.get("layout_mode") or layout_default
+        width = win.get("width_m")
+        amp = win.get("amplitude_m")
+        height = win.get("height_m") or height_default
+        geom = geometric_targets(mode, amp, width, height)
+        sub = frames[(frames["unix_ms"] >= win["t0"] - 20) & (frames["unix_ms"] <= win["t1"] + 20)]
+        obs = observed_targets(sub, width, height, mode)
+        targets = []
+        for t in merge_targets(geom, obs):
+            w = float(t["w"]) if np.isfinite(t["w"]) else 0.05
+            h = t.get("h") or t["w"]
+            h = float(h) if np.isfinite(h) else 0.05
+            targets.append(
+                {
+                    "end_num": int(t["end_num"]),
+                    "x": float(t["x"]),
+                    "y": float(t["y"]),
+                    "kind": t["kind"],
+                    "w": w,
+                    "h": h,
+                }
+            )
+        out.append(
+            {
+                "t0": float(win["t0"]),
+                "t1": float(win["t1"]),
+                "ring_name": str(win.get("ring_name") or ""),
+                "is_training": bool(win.get("is_training")),
+                "targets": targets,
+            }
+        )
+    return out
+
+
+def window_target_at(windows: list[dict], t: float, end_num) -> dict | None:
+    if end_num is None or not pd.notna(end_num):
+        return None
+    win = None
+    for w in windows:
+        if w["t0"] - 20 <= t <= w["t1"] + 20:
+            win = w
+            break
+        if t >= w["t0"] - 20:
+            win = w
+    if win is None and windows:
+        win = windows[0]
+    if not win:
+        return None
+    return target_by_id(win["targets"], end_num)
+
+
+_HIT_NONE = {"", "none", "nan"}
+
+
+def active_cursor_key(active) -> str:
+    a = str(active or "").strip().lower()
+    if a in ("eye", "eyepinch", "gaze"):
+        return "eye"
+    if a in ("head", "headpinch"):
+        return "head"
+    if a in ("hand", "handpinch"):
+        return "hand"
+    return a if a in ("eye", "head", "hand") else ""
+
+
+def point_in_target(x: float, y: float, tg: dict) -> bool:
+    if tg.get("kind") == "rect":
+        return abs(x - tg["x"]) <= tg["w"] / 2.0 and abs(y - tg["y"]) <= tg["h"] / 2.0
+    r = float(tg["w"]) / 2.0
+    return (x - tg["x"]) ** 2 + (y - tg["y"]) ** 2 <= r * r
+
+
+def target_by_id(targets: list[dict], end_num) -> dict | None:
+    if end_num is None or not pd.notna(end_num):
+        return None
+    want = int(end_num)
+    for tg in targets:
+        if tg.get("end_num") == want:
+            return tg
+    return None
+
+
+def start_target_geom(
+    start_num,
+    *,
+    mode: str,
+    amplitude_m: float,
+    width_m: float,
+    height_m: float = RECT_HEIGHT_M,
+) -> dict | None:
+    return target_by_id(geometric_targets(mode, amplitude_m, width_m, height_m), start_num)
+
+
+def xy_inside_target(x: np.ndarray, y: np.ndarray, tg: dict) -> np.ndarray:
+    out = np.zeros(len(x), dtype=bool)
+    ok = np.isfinite(x) & np.isfinite(y)
+    if tg.get("kind") == "rect":
+        out[ok] = (np.abs(x[ok] - tg["x"]) <= tg["w"] / 2.0) & (np.abs(y[ok] - tg["y"]) <= tg["h"] / 2.0)
+    else:
+        r = float(tg["w"]) / 2.0
+        out[ok] = (x[ok] - tg["x"]) ** 2 + (y[ok] - tg["y"]) ** 2 <= r * r
+    return out
+
+
+def last_on_start_from_xy(
+    unix_ms: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+    *,
+    appear: float,
+    t_end: float,
+    start_tg: dict | None,
+    lookback_ms: float = 1500.0,
+) -> float | None:
+    """Last sample still inside start_tg (not first sample already outside)."""
+    if start_tg is None or unix_ms.size == 0:
+        return None
+    lo = int(np.searchsorted(unix_ms, appear, side="left"))
+    hi = int(np.searchsorted(unix_ms, t_end, side="right"))
+    on = xy_inside_target(x[lo:hi], y[lo:hi], start_tg)
+    if on.any():
+        return float(unix_ms[lo:hi][on][-1])
+    lo_pre = int(np.searchsorted(unix_ms, appear - lookback_ms, side="left"))
+    on_pre = xy_inside_target(x[lo_pre:lo], y[lo_pre:lo], start_tg)
+    if on_pre.any():
+        return float(unix_ms[lo_pre:lo][on_pre][-1])
+    return None
+
+
+def _hit_name(row: pd.Series) -> str:
+    key = active_cursor_key(row.get("active_cursor"))
+    if key:
+        col = f"{key}_hit_target"
+        if col in row.index and pd.notna(row.get(col)):
+            s = str(row.get(col)).strip()
+            if s:
+                return s
+    h = row.get("hit_target")
+    return str(h).strip() if pd.notna(h) else ""
+
+
+def cursor_on_start_target(row: pd.Series, start_i: int, start_tg: dict | None) -> bool | None:
+    """True if the active Quest cursor is still on the previous target."""
+    name = _hit_name(row)
+    if name.startswith("Target_") or name.startswith("MenuTarget_"):
+        return name in (f"Target_{start_i}", f"MenuTarget_{start_i}")
+    if start_tg is not None:
+        key = active_cursor_key(row.get("active_cursor"))
+        if key:
+            x, y = row.get(f"{key}_x"), row.get(f"{key}_y")
+            if x is None or y is None or (isinstance(x, float) and not np.isfinite(x)):
+                x, y = row.get(f"{key}_wall_x"), row.get(f"{key}_wall_y")
+            if pd.notna(x) and pd.notna(y):
+                return point_in_target(float(x), float(y), start_tg)
+    low = name.lower()
+    if low in _HIT_NONE:
+        return False
+    return None
+
+
+def last_on_start_unix_ms(
+    frames: pd.DataFrame,
+    *,
+    appear: float,
+    confirm: float,
+    start_num,
+    start_tg: dict | None,
+    first_hit: float | None = None,
+    lookback_ms: float = 1500.0,
+) -> float | None:
+    """Last Quest frame still on start_num (not the first frame already off)."""
+    if frames.empty or start_num is None or pd.isna(start_num) or start_tg is None:
+        return None
+    t_end = float(confirm) + 50.0
+    if first_hit is not None and np.isfinite(first_hit):
+        t_end = min(t_end, float(first_hit))
+    key = ""
+    if "active_cursor" in frames.columns and not frames["active_cursor"].empty:
+        key = active_cursor_key(frames["active_cursor"].iloc[0])
+    if not key:
+        return None
+    xcol = f"{key}_x" if f"{key}_x" in frames.columns else f"{key}_wall_x"
+    ycol = f"{key}_y" if f"{key}_y" in frames.columns else f"{key}_wall_y"
+    if xcol not in frames.columns or ycol not in frames.columns:
+        return None
+    return last_on_start_from_xy(
+        frames["unix_ms"].to_numpy(dtype=float),
+        pd.to_numeric(frames[xcol], errors="coerce").to_numpy(dtype=float),
+        pd.to_numeric(frames[ycol], errors="coerce").to_numpy(dtype=float),
+        appear=float(appear),
+        t_end=t_end,
+        start_tg=start_tg,
+        lookback_ms=lookback_ms,
+    )
 
 
 def m_to_deg(metres: float, *, depth_m: float = DEPTH_M) -> float:
@@ -601,7 +812,7 @@ def run_bout(bout: Path, *, per_step: bool) -> Path:
                 )
                 n_fig += 1
 
-    print(f"{subject}/{run}: {n_fig} figures → {out_dir}")
+    print(f"{subject}/{run}: {n_fig} figures -> {out_dir}")
     return out_dir
 
 

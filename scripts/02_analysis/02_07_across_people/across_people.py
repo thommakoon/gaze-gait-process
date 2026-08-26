@@ -5,8 +5,9 @@ The unit is the **participant**, not the trial. Run ``run_analyses.py`` first,
 then this script. It does **not** pool every trial from everyone into one mean.
 
     1  Median MT / dwell / hit rate per standing|walking × interaction × layout
+       (walking cycle 1 dropped as practice; keep cycles 2–3 vs standing's 2)
     2  I-VT rate per cursor; standing vs walking within person, then test deltas
-    3  Mean of person first-hit LF-phase histograms (walking only)
+    3  Mean of person first-hit / confirm-count LF-phase histograms (walking only)
     4  Trajectory exemplars (illustration, not a test)
     5  Mean±SE of person Fitts slopes (never pool endpoints into one σ)
     6  Mean±SE of person H(f); step-band |H| / coherence
@@ -45,12 +46,20 @@ from _paths import (
     is_practice_bout,
     participant_dir,
 )
+from fitts_gait_onset import PHASE_LABEL, harmonic_curve, harmonic_k_fit, sweep_harmonic
+from fitts_iso import keep_id_reps
+
+INTER_STYLE = {
+    "HeadPinch": {"label": "Head", "color": "#1f77b4"},
+    "HandPinch": {"label": "Hand", "color": "#ff7f0e"},
+    "EyePinch": {"label": "Eye", "color": "#2ca02c"},
+}
 
 OUT = DATA_ROOT / "participants" / "_across_people"
 STEPS = {
     1: "MT / dwell / hit",
     2: "I-VT counts",
-    3: "Gait onset",
+    3: "Gait onset / confirm count",
     4: "Trajectory exemplars",
     5: "Effective Fitts",
     6: "H(f)",
@@ -188,6 +197,104 @@ def paired_deltas(person: pd.DataFrame, metric: str, keys: list[str]) -> pd.Data
     return pd.DataFrame(rows)
 
 
+def _phase_count_hist(pct: np.ndarray) -> pd.DataFrame:
+    x = np.asarray(pct, dtype=float)
+    x = x[np.isfinite(x)]
+    counts, edges = np.histogram(x, bins=PHASE_BINS)
+    return pd.DataFrame(
+        {
+            "bin_left": edges[:-1],
+            "bin_right": edges[1:],
+            "bin_center": 0.5 * (edges[:-1] + edges[1:]),
+            "count": counts.astype(float),
+        }
+    )
+
+
+def _collapse_count_hists(hist: pd.DataFrame) -> pd.DataFrame:
+    keys = ["interaction", "layout", "bin_left", "bin_right", "bin_center"]
+    across = hist.groupby(keys, as_index=False)["count"].agg(mean="mean", sd="std", n="count")
+    across["se"] = across["sd"] / np.sqrt(across["n"].clip(lower=1))
+    return across
+
+
+def _draw_confirm_count_panel(ax, g: pd.DataFrame, *, title: str, color: str) -> None:
+    g = g.sort_values("bin_center")
+    centers = g["bin_center"].to_numpy(dtype=float)
+    mean = g["mean"].to_numpy(dtype=float)
+    se = g["se"].fillna(0.0).to_numpy(dtype=float)
+    width = float(np.median(g["bin_right"] - g["bin_left"])) * 0.92
+    ax.bar(
+        centers,
+        mean,
+        width=width,
+        yerr=se,
+        color=color,
+        edgecolor="black",
+        linewidth=0.5,
+        capsize=3,
+        error_kw={"elinewidth": 0.9},
+    )
+    _, best = sweep_harmonic(centers, mean)
+    f1 = harmonic_k_fit(centers, mean, 1)
+    f2 = harmonic_k_fit(centers, mean, 2)
+    if np.isfinite(best.get("r2", np.nan)) and "a" in best:
+        ax.plot(
+            centers,
+            harmonic_curve(centers, best),
+            color="#8e44ad",
+            lw=2.0,
+            label=f"best f={best['f_cyc']:.1f}  R²={best['r2']:.2f}",
+        )
+    if np.isfinite(f2.get("r2", np.nan)) and "a" in f2:
+        ax.plot(centers, harmonic_curve(centers, f2), color="#c0392b", lw=1.3, ls="--", label=f"f=2  R²={f2['r2']:.2f}")
+    if np.isfinite(f1.get("r2", np.nan)) and "a" in f1:
+        ax.plot(centers, harmonic_curve(centers, f1), color="#2980b9", lw=1.1, ls=":", label=f"f=1  R²={f1['r2']:.2f}")
+    n_people = int(g["n"].max()) if not g.empty else 0
+    ax.axvline(50.0, color="0.5", lw=0.8, ls=":", label="~RF IC")
+    ax.set_xlim(0, 100)
+    ax.set_xticks(np.arange(0, 101, 10))
+    ax.set_title(f"{title}  (N={n_people})")
+    ax.legend(frameon=False, loc="upper right", fontsize=8)
+    ax.grid(axis="y", alpha=0.3)
+
+
+def plot_layout_confirm_count(
+    across_h: pd.DataFrame, out: Path, *, layout: str, title: str
+) -> None:
+    sub = across_h[across_h["layout"].astype(str) == layout].copy()
+    if sub.empty:
+        skip(f"confirm-count {title} — no person histograms")
+        return
+    inters = [i for i in INTERACTIONS if i in set(sub["interaction"].astype(str))]
+    if not inters:
+        return
+    fig, axes = plt.subplots(1, len(inters), figsize=(4.4 * len(inters), 4.4), sharey=False)
+    axes = np.atleast_1d(axes)
+    for ax, inter in zip(axes, inters):
+        style = INTER_STYLE.get(inter, {"label": inter, "color": "#4a7c59"})
+        _draw_confirm_count_panel(
+            ax,
+            sub[sub["interaction"] == inter],
+            title=style["label"],
+            color=style["color"],
+        )
+        ax.set_xlabel(PHASE_LABEL)
+    axes[0].set_ylabel("Mean confirm count per person")
+    fig.suptitle(f"{title} — confirm count vs gait onset  (mean±SE of person histograms)")
+    fig.tight_layout()
+    png = out / f"3_confirm_count_vs_gait_{layout}.png"
+    fig.savefig(png, dpi=150)
+    plt.close(fig)
+    stand = DATA_ROOT / "participants" / "_stand_walk_plots"
+    stand.mkdir(parents=True, exist_ok=True)
+    (stand / f"confirm_count_vs_gait_{layout}.png").write_bytes(png.read_bytes())
+
+
+def plot_ring_confirm_count(across_h: pd.DataFrame, out: Path) -> None:
+    plot_layout_confirm_count(across_h, out, layout="ring", title="Ring")
+
+
 def circ_mean_pct(pct: np.ndarray) -> float:
     x = np.asarray(pct, dtype=float)
     x = x[np.isfinite(x)]
@@ -260,6 +367,10 @@ def analysis_1(people: list[str], out: Path) -> None:
         skip("analysis 1 — run check_mt_dwell.py first")
         return
     ep = annotate_bout(keep_people(annotate_bout(ep), "participant", people))
+    n_before = len(ep)
+    ep = keep_id_reps(ep, min_rep=2, max_rep=3, walking_only=True)
+    if n_before:
+        print(f"1  ID reps: dropped {n_before - len(ep)}/{n_before} walking cycle-1 practice trials")
     summary = annotate_bout(keep_people(annotate_bout(summary), "participant", people))
     keys = ["participant", "speed_group", "interaction", "layout"]
     rows = []
@@ -327,6 +438,8 @@ def analysis_2(people: list[str], out: Path) -> None:
 def analysis_3(people: list[str], out: Path) -> None:
     rows = []
     hists = []
+    confirm_hists = []
+    layout_confirm: dict[str, dict[str, list[np.ndarray]]] = {"ring": {}, "rect": {}}
     for person in people:
         root = participant_dir(person)
         if not root.is_dir():
@@ -346,6 +459,7 @@ def analysis_3(people: list[str], out: Path) -> None:
                     continue
                 ep = pd.read_csv(path)
                 pct = pd.to_numeric(ep.get("first_hit_lf_pct"), errors="coerce").to_numpy(dtype=float)
+                confirm = pd.to_numeric(ep.get("confirm_lf_pct"), errors="coerce").to_numpy(dtype=float)
                 rec = {
                     "participant": person,
                     "speed": speed,
@@ -353,31 +467,45 @@ def analysis_3(people: list[str], out: Path) -> None:
                     "layout": layout_of(speed),
                     "speed_group": "walking",
                     "n_hits": int(np.isfinite(pct).sum()),
+                    "n_confirms": int(np.isfinite(confirm).sum()),
                     "circ_mean_lf_pct": circ_mean_pct(pct),
+                    "circ_mean_confirm_lf_pct": circ_mean_pct(confirm),
                 }
                 rows.append(rec)
-                if rec["n_hits"] == 0:
+                if rec["n_hits"] > 0:
+                    counts, edges = np.histogram(pct[np.isfinite(pct)], bins=PHASE_BINS, density=True)
+                    hists.append(
+                        pd.DataFrame(
+                            {
+                                "participant": person,
+                                "interaction": inter,
+                                "layout": layout_of(speed),
+                                "bin_left": edges[:-1],
+                                "bin_right": edges[1:],
+                                "density": counts,
+                            }
+                        )
+                    )
+                if rec["n_confirms"] == 0:
                     continue
-                counts, edges = np.histogram(pct[np.isfinite(pct)], bins=PHASE_BINS, density=True)
-                h = pd.DataFrame(
-                    {
-                        "participant": person,
-                        "interaction": inter,
-                        "layout": layout_of(speed),
-                        "bin_left": edges[:-1],
-                        "bin_right": edges[1:],
-                        "density": counts,
-                    }
-                )
-                hists.append(h)
+                ch = _phase_count_hist(confirm)
+                ch["participant"] = person
+                ch["interaction"] = inter
+                ch["layout"] = layout_of(speed)
+                confirm_hists.append(ch)
+                lay = layout_of(speed)
+                if lay in layout_confirm:
+                    layout_confirm[lay].setdefault(person, []).append(confirm[np.isfinite(confirm)])
     person = pd.DataFrame(rows)
     if person.empty:
         skip("analysis 3 — run fitts_gait_onset.py on walking bouts first")
         return
     person.to_csv(out / "3_person_cells.csv", index=False)
-    collapse(person, ["interaction", "layout"], ["circ_mean_lf_pct", "n_hits"]).to_csv(
-        out / "3_across_people.csv", index=False
-    )
+    collapse(
+        person,
+        ["interaction", "layout"],
+        ["circ_mean_lf_pct", "circ_mean_confirm_lf_pct", "n_hits", "n_confirms"],
+    ).to_csv(out / "3_across_people.csv", index=False)
     if hists:
         hist = pd.concat(hists, ignore_index=True)
         hist.to_csv(out / "3_person_histograms.csv", index=False)
@@ -400,6 +528,40 @@ def analysis_3(people: list[str], out: Path) -> None:
         fig.tight_layout()
         fig.savefig(out / "3_phase_histogram.png", dpi=140)
         plt.close(fig)
+    if confirm_hists:
+        chist = pd.concat(confirm_hists, ignore_index=True)
+        chist.to_csv(out / "3_person_confirm_count_histograms.csv", index=False)
+        across_c = _collapse_count_hists(chist)
+        across_c.to_csv(out / "3_confirm_count_histogram.csv", index=False)
+        plot_layout_confirm_count(across_c, out, layout="ring", title="Ring")
+        plot_layout_confirm_count(across_c, out, layout="rect", title="Rectangle")
+        for lay, label in (("ring", "Ring"), ("rect", "Rectangle")):
+            pooled_rows = []
+            for who, parts in layout_confirm[lay].items():
+                if not parts:
+                    continue
+                h = _phase_count_hist(np.concatenate(parts))
+                h["participant"] = who
+                h["interaction"] = "all"
+                h["layout"] = lay
+                pooled_rows.append(h)
+            if not pooled_rows:
+                continue
+            pooled = pd.concat(pooled_rows, ignore_index=True)
+            pooled_across = _collapse_count_hists(pooled)
+            pooled_across.to_csv(out / f"3_confirm_count_histogram_{lay}_pooled.csv", index=False)
+            fig, ax = plt.subplots(figsize=(8.0, 4.6))
+            _draw_confirm_count_panel(ax, pooled_across, title="Head + Hand + Eye", color="#4a7c59")
+            ax.set_xlabel(PHASE_LABEL)
+            ax.set_ylabel("Mean confirm count per person")
+            fig.suptitle(f"{label} — confirm count vs gait onset  (mean±SE of person histograms)")
+            fig.tight_layout()
+            png = out / f"3_confirm_count_vs_gait_{lay}_pooled.png"
+            fig.savefig(png, dpi=150)
+            plt.close(fig)
+            stand = DATA_ROOT / "participants" / "_stand_walk_plots"
+            stand.mkdir(parents=True, exist_ok=True)
+            (stand / f"confirm_count_vs_gait_{lay}_pooled.png").write_bytes(png.read_bytes())
     print(f"3  person cells={len(person)}  N={person['participant'].nunique()}")
 
 

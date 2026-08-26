@@ -33,6 +33,7 @@ Each recording **bout** is `participant<N>/<Bout>/<Interaction>/`:
 
 ```
 data/participants/participant0/
+├── LOCK                          # OpenEye refuses writes while this file exists
 ├── models/                       # shared OpenEye calib (once per person)
 ├── Ring/  Rectangle/  PracticeRing/  PracticeRectangle/
 │   └── HeadPinch | HandPinch | EyePinch/
@@ -58,6 +59,16 @@ recordings:
 uv run python link_practice_openeye_calib.py --participant 21 --dry-run
 uv run python link_practice_openeye_calib.py --participant 21
 ```
+
+## New participant: inventory, then clean
+
+```bash
+uv run python inventory_raw.py --participant 35
+uv run python inventory_raw.py --participant 35 --park
+uv run python run_pipeline.py --participant 35 --all --keep-going
+```
+
+``inventory_raw.py`` lists the 12 bouts, empty IMU files, extra record-presses, extra Quest JSON, and dead-accel feet (e.g. RF stub / broken wire). ``--park`` moves extras into ``_*`` folders under ``00_raw`` so coverage sees one take.
 
 ## One command per bout, or all 12
 

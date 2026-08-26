@@ -26,7 +26,7 @@ from fitts_gait_onset import (
     pick_quest_json,
 )
 from gait_onset import GaitOnsetTimeline
-from head_gait_cycle import skip_for_lf_onset
+from head_gait_cycle import skip_for_foot_onset
 from interaction_gait_stride import load_first_hits
 from mark_bad_ic_periods import load_bad_ic_windows
 from wall_trajectory import load_trial
@@ -298,6 +298,7 @@ def attach_gait(ep: pd.DataFrame, bout: Path, *, near_ic_pct: float = NEAR_IC_PC
     except (FileNotFoundError, ValueError, OSError):
         return ep
 
+    ref_foot = timeline.reference_foot
     for ms_col, out_col in (
         ("first_hit_unix_ms", "first_hit_lf_pct"),
         ("confirm_unix_ms", "confirm_lf_pct"),
@@ -309,10 +310,10 @@ def attach_gait(ep: pd.DataFrame, bout: Path, *, near_ic_pct: float = NEAR_IC_PC
             t_s[ok] = ms_to_t_s(ms[ok], offset_ns=offset_ns, t0=t0)
         dummy = pd.DataFrame({"t_s": np.where(np.isfinite(t_s), t_s, 0.0)})
         aligned = timeline.align_dataframe(dummy, time_col="t_s")
-        pct = aligned["lf_stride_pct"].astype(float).to_numpy()
+        pct = timeline.reference_phase_pct(aligned)
         skip = np.ones(len(ep), dtype=bool)
         if ok.any():
-            skip[ok] = skip_for_lf_onset(t_s[ok], windows) | ~np.isfinite(pct[ok])
+            skip[ok] = skip_for_foot_onset(t_s[ok], windows, ref_foot) | ~np.isfinite(pct[ok])
         pct[skip] = np.nan
         ep[out_col] = pct
 

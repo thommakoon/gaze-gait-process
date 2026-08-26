@@ -22,6 +22,17 @@ from mark_bad_ic_periods import load_bad_ic_windows, times_in_bad_ic, times_in_p
 
 Foot = Literal["left", "right"]
 
+# Known dead / stalled IMUs. Phase is still stored as LF-equivalent
+# (RF % + 50) so 0% remains ≈ left IC for pooling with other bouts.
+GAIT_REF_FOOT_OVERRIDE = {
+    ("participant31", "Rectangle_HandPinch"): "right",
+}
+RF_TO_LF_SHIFT_PCT = 50.0
+
+
+def resolved_gait_foot(subject: str, run: str, requested: str = "both") -> str:
+    return GAIT_REF_FOOT_OVERRIDE.get((str(subject), str(run)), requested)
+
 
 @dataclass(frozen=True)
 class FootOnset:
@@ -119,6 +130,7 @@ class GaitOnsetTimeline:
         *,
         alternating: list[FootOnset] | None = None,
         bad_ic_windows: pd.DataFrame | None = None,
+        reference_foot: Foot = "left",
     ) -> None:
         self.lf_strides = lf_strides
         self.rf_strides = rf_strides
@@ -126,6 +138,7 @@ class GaitOnsetTimeline:
         self.bad_ic_windows = (
             bad_ic_windows if bad_ic_windows is not None else pd.DataFrame()
         )
+        self.reference_foot = reference_foot
 
     @classmethod
     def from_bout(
@@ -137,7 +150,11 @@ class GaitOnsetTimeline:
         exclude_outliers: bool = True,
         gait_foot: str = "both",
     ) -> GaitOnsetTimeline:
-        rf = _load_foot_strides(bout, subject, run, "right", exclude_outliers=exclude_outliers)
+        gait_foot = resolved_gait_foot(subject, run, gait_foot)
+        try:
+            rf = _load_foot_strides(bout, subject, run, "right", exclude_outliers=exclude_outliers)
+        except FileNotFoundError:
+            rf = []
         if gait_foot == "right":
             if not rf:
                 raise ValueError(f"No RF strides for {subject}/{run}")
@@ -145,7 +162,7 @@ class GaitOnsetTimeline:
                 bad_ic = load_bad_ic_windows(bout)
             except FileNotFoundError:
                 bad_ic = pd.DataFrame()
-            return cls([], rf, alternating=[], bad_ic_windows=bad_ic)
+            return cls([], rf, bad_ic_windows=bad_ic, reference_foot="right")
 
         lf = _load_foot_strides(bout, subject, run, "left", exclude_outliers=exclude_outliers)
         try:
@@ -155,13 +172,14 @@ class GaitOnsetTimeline:
         if gait_foot == "left":
             if not lf:
                 raise ValueError(f"No LF strides for {subject}/{run}")
-            return cls(lf, [], alternating=[], bad_ic_windows=bad_ic)
+            return cls(lf, [], bad_ic_windows=bad_ic, reference_foot="left")
 
-        if not rf:
-            raise ValueError(f"No RF strides for {subject}/{run}")
         if not lf:
             raise ValueError(f"No LF strides for {subject}/{run}")
-        return cls(lf, rf, bad_ic_windows=bad_ic)
+        if not rf:
+            # One-foot recordings (e.g. RF stub): LF phase is enough for gait onset / ID_e.
+            return cls(lf, [], bad_ic_windows=bad_ic, reference_foot="left")
+        return cls(lf, rf, bad_ic_windows=bad_ic, reference_foot="left")
 
     @property
     def window_s(self) -> tuple[float, float]:
@@ -204,6 +222,23 @@ class GaitOnsetTimeline:
                 }
             )
         return pd.DataFrame(rows)
+
+    def reference_phase_pct(self, aligned: pd.DataFrame) -> np.ndarray:
+        """Stride phase with 0% = left IC.
+
+        RF-only bouts use ``(rf_pct + 50) % 100`` so RF IC sits near 50%,
+        matching the usual LF-cycle convention.
+        """
+        if self.reference_foot == "right":
+            rf = pd.to_numeric(aligned["rf_stride_pct"], errors="coerce").to_numpy(dtype=float)
+            out = (rf + RF_TO_LF_SHIFT_PCT) % 100.0
+            out[~np.isfinite(rf)] = np.nan
+            return out
+        return pd.to_numeric(aligned["lf_stride_pct"], errors="coerce").to_numpy(dtype=float)
+
+    def reference_ics_s(self) -> np.ndarray:
+        strides = self.rf_strides if self.reference_foot == "right" else self.lf_strides
+        return np.array([s.ic_time_s for s in strides], dtype=float)
 
     def align_dataframe(self, df: pd.DataFrame, *, time_col: str = "t_s") -> pd.DataFrame:
         if df.empty:

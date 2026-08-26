@@ -82,15 +82,21 @@ def assign_stride_phases(
     return sid, pct, ok
 
 
-def skip_for_lf_onset(t_s: np.ndarray, windows: pd.DataFrame) -> np.ndarray:
-    """Pause, or bad IC that involves the left foot."""
+def skip_for_foot_onset(t_s: np.ndarray, windows: pd.DataFrame, foot: str) -> np.ndarray:
+    """Pause, or bad IC that involves ``foot`` (``left`` or ``right``)."""
     if windows is None or windows.empty:
         return np.zeros(len(t_s), dtype=bool)
     pause = windows[windows["kind"] == "pause"] if "kind" in windows.columns else windows.iloc[0:0]
     bad = windows[windows["kind"] == "bad_ic"] if "kind" in windows.columns else windows
+    needle = "right" if str(foot).lower().startswith("r") else "left"
     if "feet" in bad.columns:
-        bad = bad[bad["feet"].astype(str).str.contains("left", case=False, na=False)]
+        bad = bad[bad["feet"].astype(str).str.contains(needle, case=False, na=False)]
     return _mask_kind(t_s, pause, {"pause"}) | _mask_kind(t_s, bad, {"bad_ic"})
+
+
+def skip_for_lf_onset(t_s: np.ndarray, windows: pd.DataFrame) -> np.ndarray:
+    """Pause, or bad IC that involves the left foot."""
+    return skip_for_foot_onset(t_s, windows, "left")
 
 
 def demean_by_stride(values: np.ndarray, stride_ids: np.ndarray) -> np.ndarray:

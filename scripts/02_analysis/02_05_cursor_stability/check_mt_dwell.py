@@ -106,7 +106,7 @@ def split_episode_mt(bout: Path) -> tuple[pd.DataFrame, dict]:
             "n_selections": 0,
             "n_with_first_hit": 0,
             "ok": False,
-            "note": "no successful selections after drop training + first-of-ring",
+            "note": "no successful selections after drop training + first-of-ID-lap",
         }
 
     hits = load_first_hits([qpath], sel)

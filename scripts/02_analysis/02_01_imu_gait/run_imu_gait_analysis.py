@@ -175,7 +175,12 @@ def setup_metadata(subject: str, runs: list[str]) -> None:
         accel_norm = np.linalg.norm(accel, axis=0)
         peaks, _ = find_peaks(accel_norm)
         if len(peaks) == 0:
-            raise ValueError(f"No peaks at all for {imu_path}")
+            t0 = round(float(time[0]), 6) if len(time) else 0.0
+            print(
+                f"  warn: no accel peaks in {imu_path.name} "
+                f"(flat/dead IMU?) — dummy IC={t0}"
+            )
+            return t0
         prominences = peak_prominences(accel_norm, peaks)[0]
         for thr in (prominence_threshold, 1.0, 0.3, 0.0):
             valid = peaks[prominences > thr] if thr > 0 else peaks
@@ -322,6 +327,45 @@ def build_run_map(sessions: list[str], run_overrides: list[str] | None) -> dict[
     return {session_id: overrides.get(session_id, infer_run_label(session_id)) for session_id in sessions}
 
 
+DEAD_RF_ACC_MAX = 0.5
+
+
+def _xsens_acc_mean(path: Path) -> float:
+    """Mean |acc| from an Xsens export (header rows before PacketCounter)."""
+    import numpy as np
+    import pandas as pd
+
+    skip = 0
+    with path.open(encoding="utf-8", errors="replace") as f:
+        for i, line in enumerate(f):
+            if line.startswith("PacketCounter"):
+                skip = i
+                break
+    df = pd.read_csv(path, skiprows=skip, nrows=4000)
+    mag = np.sqrt(
+        df["Acc_X"].astype(float) ** 2
+        + df["Acc_Y"].astype(float) ** 2
+        + df["Acc_Z"].astype(float) ** 2
+    )
+    return float(mag.mean())
+
+
+def _discard_cloned_rf(gait_result: Path, subject: str, run: str) -> None:
+    """Drop RF stride CSVs cloned from LF so gait onset stays LF-only."""
+    proc = gait_result / "processed" / subject / run
+    if not proc.is_dir():
+        return
+    for p in proc.glob("right_foot*"):
+        p.unlink()
+        print(f"removed cloned {p.name}")
+    note = proc / "RF_DEAD_STUB.txt"
+    note.write_text(
+        "RF IMU was all zeros. Pipeline cloned LF so LF strides could be written.\n"
+        "Right-foot CSVs were removed; gait onset / ID_e use LF only.\n"
+    )
+    print(f"wrote {note.name}")
+
+
 def run_bout(bout: Path, args: argparse.Namespace) -> None:
     """Gait analysis for one per-participant bout.
 
@@ -340,6 +384,7 @@ def run_bout(bout: Path, args: argparse.Namespace) -> None:
     gait_result.mkdir(parents=True, exist_ok=True)
     write_path_json()
 
+    rf_was_dead = False
     if args.stage in ("all", "stage"):
         dest_imu = gait_result / "raw" / subject / run / "imu"
         dest_imu.mkdir(parents=True, exist_ok=True)
@@ -350,6 +395,17 @@ def run_bout(bout: Path, args: argparse.Namespace) -> None:
                     f"Missing {src} — run 01_clean/run_pipeline.py for this bout first"
                 )
             shutil.copy2(src, dest_imu / f"{side}.csv")
+        rf_src = dest_imu / "RF.csv"
+        lf_src = dest_imu / "LF.csv"
+        rf_acc = _xsens_acc_mean(rf_src)
+        if rf_acc < DEAD_RF_ACC_MAX:
+            # Dual-foot pipeline requires RF events. Clone LF so LF strides can
+            # be written, then drop RF products after (gait onset is LF-only).
+            print(
+                f"warn: RF acc mean={rf_acc:.3f} — clone LF onto RF for pipeline"
+            )
+            shutil.copy2(lf_src, rf_src)
+            rf_was_dead = True
         print(f"staged {subject}/{run} -> {dest_imu}")
 
     _ensure_imu_gait_on_path()
@@ -359,7 +415,19 @@ def run_bout(bout: Path, args: argparse.Namespace) -> None:
     if args.stage in ("all", "metadata"):
         setup_metadata(subject, runs)
     if args.stage in ("all", "pipeline"):
+        if rf_was_dead:
+            interim_run = gait_result / "interim" / subject / run
+            for name in (
+                "_trajectory_estimation_left.json",
+                "_trajectory_estimation_right.json",
+            ):
+                p = interim_run / name
+                if p.is_file():
+                    p.unlink()
+                    print(f"cleared stale {name}")
         run_pipeline(subject, runs)
+        if rf_was_dead:
+            _discard_cloned_rf(gait_result, subject, run)
 
     print(f"Done. Results under {gait_result / 'processed'}")
 

@@ -60,9 +60,17 @@ uv run python run_analyses.py --participant 21 --only 5 6
 uv run python run_analyses.py --participants 21 22 --only 7
 ```
 
+Standing vs walking **line** plots (Head / Hand / Eye, Ring vs Rectangle) from those analysis CSVs, default p22–32:
+
+```powershell
+uv run python 02_08_stand_walk_plots/plot_stand_walk.py
+```
+
+Writes `data/participants/_stand_walk_plots/` (`final_angle_deg.png`, `movement_time_s.png`, `movement_only_s.png`, `dwell_s.png`, `throughput_bps.png`, `n_fixation.png`). Mean±SE of person medians. Needs `check_mt_dwell` episodes first.
+
 Restrict with `--bout Ring` and/or `--interaction EyePinch`. `--keep-going` continues after a failed step.
 
-The unit of analysis across people is the **participant**, not the trial. Run everyone through the same six scripts, then collapse with analysis **7**:
+The unit of analysis across people is the **participant**, not the trial. Run everyone through the same six scripts, then collapse with analysis **7**. Training laps and the first target of each A×W ID lap (ring first-dot, rectangle opening L) are dropped before MT / Fitts / gait-event counts.
 
 ```powershell
 uv run python 02_07_across_people/across_people.py --participants 21 22

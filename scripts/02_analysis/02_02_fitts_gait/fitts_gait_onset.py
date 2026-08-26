@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Fitts target events vs LF gait onset (overall + per-dot).
 
-Drops training rings and the **first target of each Fitts ring** (ISO-style).
+Drops training rings and the **first target of each A×W ID lap** (ISO-style:
+ring first-dot, rectangle opening L).
 Uses one Quest stream matching the interaction. Times are mapped with
 ``offset_quest_to_pc_ns`` onto the 200 Hz grid, then LF stride phase
 (0% = left IC). Pause + LF-bad-IC windows are excluded.
+If the left IMU is unusable (p31 Rectangle HandPinch), RF strides are used
+and shifted +50% so 0% is still ≈ left IC.
 
 Plots (overall/ and per_dot/target_XX/):
   - target_count_vs_gait           appear count vs LF phase (+ f=2 overlay)
@@ -40,15 +43,17 @@ from pathlib import Path
 
 import matplotlib
 
-matplotlib.use("Agg")
+if __name__ == "__main__":
+    matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
 from _paths import STAGE_DIRS, add_bout_args, bout_labels
-from gait_onset import GaitOnsetTimeline
+from fitts_iso import drop_training_and_id_openers
+from gait_onset import GaitOnsetTimeline, RF_TO_LF_SHIFT_PCT
 from gaze_target_stride import stride_pct_histogram
-from head_gait_cycle import skip_for_lf_onset
+from head_gait_cycle import skip_for_foot_onset
 from interaction_gait_stride import (
     _binned_mean_1d,
     load_first_hits,
@@ -101,8 +106,6 @@ def load_fitts_selections(path: Path, *, success_only: bool) -> pd.DataFrame:
     trial = json.loads(path.read_text(encoding="utf-8-sig"))
     rows = []
     for sel in trial.get("selections") or []:
-        if success_only and not sel.get("success", False):
-            continue
         ms = sel.get("selection_unix_ms")
         if ms is None:
             continue
@@ -120,6 +123,7 @@ def load_fitts_selections(path: Path, *, success_only: bool) -> pd.DataFrame:
                 "ring_index": sel.get("ring_index"),
                 "ring_name": sel.get("ring_name", ""),
                 "is_training": bool(sel.get("is_training", False)),
+                "opening_selection": bool(sel.get("opening_selection", False)),
                 "amplitude_m": sel.get("amplitude_m"),
                 "width_m": sel.get("width_m"),
             }
@@ -127,14 +131,10 @@ def load_fitts_selections(path: Path, *, success_only: bool) -> pd.DataFrame:
     df = pd.DataFrame(rows)
     if df.empty:
         return df
-    df = df.sort_values("selection_unix_ms").reset_index(drop=True)
-    # Drop training rings and the first recorded target of each ring lap.
-    df = df[df["is_training"] != True].copy()  # noqa: E712
-    if df.empty:
-        return df
-    keys = ["file", "ring_index"] if df["ring_index"].notna().any() else ["file"]
-    df["ring_seq"] = df.groupby(keys, dropna=False).cumcount()
-    df = df[df["ring_seq"] > 0].drop(columns=["ring_seq"]).reset_index(drop=True)
+    # Mark openers on every recorded target (including fails), then ISO-drop.
+    df = drop_training_and_id_openers(df)
+    if success_only:
+        df = df[df["success"] == True].reset_index(drop=True)  # noqa: E712
     return df
 
 
@@ -185,7 +185,7 @@ def build_episodes(
     qpath = pick_quest_json(bout)
     sel = load_fitts_selections(qpath, success_only=success_only)
     if sel.empty:
-        raise RuntimeError(f"{subject}/{run}: no Fitts selections after dropping training + first-of-ring")
+        raise RuntimeError(f"{subject}/{run}: no Fitts selections after dropping training + first-of-ID-lap")
 
     hits = load_first_hits([qpath], sel)
     hit_key = hits[["start_num", "end_num", "selection_unix_ms", "event_unix_ms"]].rename(
@@ -204,6 +204,7 @@ def build_episodes(
         windows = load_bad_ic_windows(bout)
     except FileNotFoundError:
         windows = pd.DataFrame()
+    ref_foot = timeline.reference_foot
 
     for name, ms_col in (
         ("appear", "appear_unix_ms"),
@@ -216,15 +217,15 @@ def build_episodes(
         t_s[ok] = ms_to_t_s(ms[ok], offset_ns=offset_ns, t0=t0)
         dummy = pd.DataFrame({"t_s": np.where(np.isfinite(t_s), t_s, 0.0)})
         aligned = timeline.align_dataframe(dummy, time_col="t_s")
-        pct = aligned["lf_stride_pct"].astype(float).to_numpy()
+        pct = timeline.reference_phase_pct(aligned)
         skip = np.ones(len(ep), dtype=bool)
         if ok.any():
-            skip[ok] = skip_for_lf_onset(t_s[ok], windows) | ~np.isfinite(pct[ok])
+            skip[ok] = skip_for_foot_onset(t_s[ok], windows, ref_foot) | ~np.isfinite(pct[ok])
         pct[skip] = np.nan
         ep[f"{name}_t_s"] = t_s
         ep[f"{name}_lf_pct"] = pct
 
-    lf_ics = np.array([s.ic_time_s for s in timeline.lf_strides], dtype=float)
+    lf_ics = timeline.reference_ics_s()
     any_ics = np.array([o.ic_time_s for o in timeline.alternating], dtype=float)
     appear_t = ep["appear_t_s"].to_numpy(dtype=float)
     assigned = np.isfinite(ep["appear_lf_pct"].to_numpy(dtype=float))
@@ -259,6 +260,12 @@ def build_episodes(
         "offset_source": offset_src,
         "n_episodes": int(len(ep)),
         "n_with_first_hit": int(ep["first_hit_unix_ms"].notna().sum()),
+        "gait_ref_foot": ref_foot,
+        "gait_ref_note": (
+            f"LF IMU stalled; RF stride phase +{RF_TO_LF_SHIFT_PCT:.0f}% so 0% still ≈ left IC"
+            if ref_foot == "right"
+            else "0% = left IC"
+        ),
         "note_mt_vs_confirm": (
             "movement_time_s = confirm_unix_ms - appear_unix_ms (duration). "
             "Confirmation onset is the confirm event's gait phase, not MT."
@@ -887,6 +894,7 @@ def run_bout(bout: Path, *, bin_width: float, min_per_dot: int) -> None:
     print(
         f"{subject}/{run}: episodes={meta['n_episodes']} "
         f"appear-assigned={meta['n_assigned_appear']} per_dot={n_dots}  "
+        f"gait_ref={meta.get('gait_ref_foot', 'left')}  "
         f"appear best f={appear['best_f']:.1f} R²={appear['best_r2']:.2f}  "
         f"hit-before-LF-IC={hit_lf['frac_before']:.0%}"
         + (

@@ -141,9 +141,13 @@ def make_plans_for_subsub(
 def make_plans_from_gui(
     folder: QuestJsonFolder,
     assignments: list[tuple[NeonExport, str, str]],
+    quest_names: Optional[list[str]] = None,
+    *,
+    only_selected_quest: bool = False,
 ) -> list[PullPlan]:
     """One plan per Neon using bout + interaction set in the GUI."""
-    groups = group_jsons_by_interaction(folder.json_names)
+    pool = list(quest_names if quest_names is not None else folder.json_names)
+    groups = group_jsons_by_interaction(pool)
     used_inter: set[str] = set()
     plans: list[PullPlan] = []
     for neon, bout, inter in assignments:
@@ -153,6 +157,16 @@ def make_plans_from_gui(
         else:
             used_inter.add(inter)
         plans.append(make_plan(folder, neon, inter, quest_names=names, speed=bout))
+    if only_selected_quest:
+        if not plans:
+            quest_bout = SPEED_BY_SUBSUB.get(folder.subsub) or folder.speed
+            for inter in INTERACTIONS:
+                names = list(groups.get(inter) or [])
+                if names:
+                    plans.append(
+                        make_plan(folder, None, inter, quest_names=names, speed=quest_bout)
+                    )
+        return plans
     quest_bout = SPEED_BY_SUBSUB.get(folder.subsub) or folder.speed
     for inter in INTERACTIONS:
         names = groups.get(inter) or []

@@ -31,11 +31,13 @@ from device_files import (
     NeonExport,
     QuestJsonFolder,
     assign_neons_to_interactions,
+    cursor_stream_label,
     filter_quest_by_sub,
     fmt_duration,
     list_neon_exports,
     list_quest_json_folders,
     quest_folder_interaction_windows,
+    quest_names_for_folder,
 )
 from pull_jobs import (
     PullPlan,
@@ -255,8 +257,8 @@ class PullGui(QMainWindow):
         pull_row = QHBoxLayout()
         self.btn_pull = QPushButton("Pull selected")
         self.btn_pull.setToolTip(
-            "Uses bout + interaction from each selected Neon row. "
-            "Quest JSONs for that interaction → …/<bout>/<interaction>/00_raw/Quest/  "
+            "Pulls only the selected Quest JSON row(s). Uses bout + interaction from each "
+            "selected Neon row. Quest → …/<bout>/<interaction>/00_raw/Quest/  "
             "Neon → …/00_raw/Motorola/."
         )
         self.dest_label = QLabel("Dest: select a Quest folder")
@@ -400,22 +402,35 @@ class PullGui(QMainWindow):
         self.quest_search = QLineEdit()
         self.quest_search.setPlaceholderText("participant (sub), e.g. 1")
         self.quest_search.setClearButtonEnabled(True)
+        self.chk_quest_latest = QCheckBox("Latest per cursor/stream only")
+        self.chk_quest_latest.setChecked(
+            bool(self._settings.value("quest_latest_only", True, type=bool))
+        )
+        self.chk_quest_latest.setToolTip(
+            "When checked, hide older takes and show only the newest JSON for each "
+            "_cursorX_streamY_ pair (9 per bout). Uncheck to list every JSON on the Quest."
+        )
         self.btn_quest_list = QPushButton("List Quest")
         row.addWidget(QLabel("sub:"))
         row.addWidget(self.quest_search, stretch=1)
+        row.addWidget(self.chk_quest_latest)
         row.addWidget(self.btn_quest_list)
         lay.addLayout(row)
         self.quest_table = QTableWidget(0, 6)
         self.quest_table.setHorizontalHeaderLabels(
-            ("sub", "subsub", "bout", "apk", "folder", "json")
+            ("sub", "subsub", "bout", "cursor/stream", "apk", "json")
         )
         self.quest_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.quest_table.setSelectionMode(QTableWidget.SingleSelection)
+        self.quest_table.setSelectionMode(QTableWidget.ExtendedSelection)
         self.quest_table.verticalHeader().setVisible(False)
         self.quest_table.setSortingEnabled(True)
         qh = self.quest_table.horizontalHeader()
         qh.setSectionResizeMode(QHeaderView.ResizeToContents)
         qh.setSectionResizeMode(5, QHeaderView.Stretch)
+        self.quest_table.setToolTip(
+            "Ctrl/Shift-click JSON rows to choose what to pull. "
+            "With “Latest per cursor/stream only”, older takes are hidden unless you uncheck it."
+        )
         lay.addWidget(self.quest_table)
         self.quest_status = QLabel("Assign Quest, type sub, List.")
         self.quest_status.setWordWrap(True)
@@ -423,6 +438,7 @@ class PullGui(QMainWindow):
         self.btn_quest_list.clicked.connect(self.list_quest)
         self.quest_search.textChanged.connect(self._apply_quest_filter)
         self.quest_search.returnPressed.connect(self.list_quest)
+        self.chk_quest_latest.toggled.connect(self._on_quest_latest_toggled)
         self.quest_table.itemSelectionChanged.connect(self._update_dest_label)
         return box
 
@@ -493,46 +509,66 @@ class PullGui(QMainWindow):
         self._quest_rows = list(rows or [])
         self._apply_quest_filter()
 
+    def _on_quest_latest_toggled(self, checked: bool) -> None:
+        self._settings.setValue("quest_latest_only", bool(checked))
+        self._apply_quest_filter()
+
+    def _quest_latest_only(self) -> bool:
+        return self.chk_quest_latest.isChecked()
+
     def _apply_quest_filter(self) -> None:
         shown = filter_quest_by_sub(self._quest_rows, self.quest_search.text())
+        latest_only = self._quest_latest_only()
         self.quest_table.setSortingEnabled(False)
         self.quest_table.setRowCount(0)
+        n_json = 0
+        n_skipped = 0
         for rec in shown:
-            r = self.quest_table.rowCount()
-            self.quest_table.insertRow(r)
-            n_json = len(rec.json_names)
-            files = ", ".join(rec.json_names)
-            vals = (
-                str(rec.sub),
-                str(rec.subsub),
-                rec.speed,
-                rec.package_label,
-                rec.folder,
-                f"{n_json}: {files}" if rec.json_names else "0",
-            )
-            for c, text in enumerate(vals):
-                if c in (0, 1):
-                    item = NumericItem(text)
-                    item.setData(Qt.UserRole, rec.sub if c == 0 else rec.subsub)
-                else:
-                    item = QTableWidgetItem(text)
-                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-                if c == 4:
-                    item.setData(Qt.UserRole, rec.remote_dir)
-                if c == 5:
-                    item.setToolTip(files or "")
-                self.quest_table.setItem(r, c, item)
+            names = quest_names_for_folder(rec, latest_only)
+            if latest_only:
+                n_skipped += rec.json_skipped
+            for name in names:
+                r = self.quest_table.rowCount()
+                self.quest_table.insertRow(r)
+                n_json += 1
+                pair = cursor_stream_label(name)
+                vals = (
+                    str(rec.sub),
+                    str(rec.subsub),
+                    rec.speed,
+                    pair,
+                    rec.package_label,
+                    name,
+                )
+                for c, text in enumerate(vals):
+                    if c in (0, 1):
+                        item = NumericItem(text)
+                        item.setData(Qt.UserRole, rec.sub if c == 0 else rec.subsub)
+                    else:
+                        item = QTableWidgetItem(text)
+                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                    if c == 5:
+                        item.setData(Qt.UserRole, rec.remote_dir)
+                        item.setToolTip(f"{rec.remote_dir}/{name}")
+                    self.quest_table.setItem(r, c, item)
         self.quest_table.setSortingEnabled(True)
         q = self.quest_search.text().strip()
+        hid = ""
+        if latest_only and n_skipped:
+            hid = f"; hid {n_skipped} older"
+        elif not latest_only:
+            hid = "; all JSON on Quest"
         if not self._quest_rows:
             self.quest_status.setText("No Quest JSON folders found (Main/Practice/Pro).")
         elif q:
             self.quest_status.setText(
-                f"sub {q}: {len(shown)} folder(s)  (of {len(self._quest_rows)} on device)"
+                f"sub {q}: {n_json} json"
+                f" ({'latest per pair' if latest_only else 'all files'}{hid})"
             )
         else:
             self.quest_status.setText(
-                f"{len(self._quest_rows)} folder(s) on Quest — type sub to filter"
+                f"{n_json} json on Quest — type sub to filter"
+                f" ({'latest per pair' if latest_only else 'all files'}{hid})"
             )
         self._update_dest_label()
 
@@ -703,14 +739,20 @@ class PullGui(QMainWindow):
 
     def _sync_dest_label(self) -> None:
         folder = self._selected_quest_folder()
+        selections = self._selected_quest_jsons()
         assignments = self._selected_neon_assignments()
         if folder is None:
-            self.dest_label.setText("Dest: select a Quest folder (JSON source + participant #)")
+            self.dest_label.setText(
+                "Dest: select Quest JSON row(s) (Ctrl/Shift for multiple)"
+            )
             return
+        n_quest = len(selections) if selections else len(
+            quest_names_for_folder(folder, self._quest_latest_only())
+        )
         if not assignments:
             self.dest_label.setText(
                 f"Dest: participant{folder.sub}/<bout>/<interaction>/00_raw/  "
-                f"Quest {len(folder.json_names)} json — set bout + interaction on Neon rows"
+                f"Quest {n_quest} json selected — set bout + interaction on Neon rows"
             )
             return
         bits = []
@@ -719,11 +761,25 @@ class PullGui(QMainWindow):
         self.dest_label.setText("Dest: " + "  |  ".join(bits))
 
     def pull_selected(self) -> None:
-        folder = self._selected_quest_folder()
-        if folder is None:
-            QMessageBox.information(self, "Pull", "Select a Quest folder row first.")
+        selections = self._selected_quest_jsons()
+        if not selections:
+            QMessageBox.information(
+                self,
+                "Pull",
+                "Select one or more Quest JSON rows (Ctrl/Shift-click), then Pull.",
+            )
             return
-        if not folder.json_names:
+        remotes = {rec.remote_dir for rec, _ in selections}
+        if len(remotes) > 1:
+            QMessageBox.information(
+                self,
+                "Pull",
+                "Select JSON from one Quest folder only (same sub-subsub bout).",
+            )
+            return
+        folder = selections[0][0]
+        selected_names = [name for _, name in selections]
+        if not selected_names:
             QMessageBox.information(self, "Pull", f"No JSON in {folder.folder}.")
             return
         quest_serial = self.assigned_quest()
@@ -745,7 +801,12 @@ class PullGui(QMainWindow):
             QMessageBox.information(self, "Pull", "Assign a Neon phone first.")
             return
         try:
-            plans = make_plans_from_gui(folder, assignments)
+            plans = make_plans_from_gui(
+                folder,
+                assignments,
+                selected_names,
+                only_selected_quest=True,
+            )
         except Exception as e:
             QMessageBox.warning(self, "Pull", str(e))
             return
@@ -843,17 +904,36 @@ class PullGui(QMainWindow):
         finally:
             self.neon_table.blockSignals(False)
 
+    def _selected_quest_jsons(self) -> list[tuple[QuestJsonFolder, str]]:
+        sel = (
+            self.quest_table.selectionModel().selectedRows()
+            if self.quest_table.selectionModel()
+            else []
+        )
+        out: list[tuple[QuestJsonFolder, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for idx in sel:
+            item = self.quest_table.item(idx.row(), 5)
+            if item is None:
+                continue
+            remote = item.data(Qt.UserRole)
+            name = item.text().strip()
+            if not remote or not name:
+                continue
+            key = (str(remote), name)
+            if key in seen:
+                continue
+            seen.add(key)
+            for rec in self._quest_rows:
+                if rec.remote_dir == remote:
+                    out.append((rec, name))
+                    break
+        return out
+
     def _selected_quest_folder(self) -> Optional[QuestJsonFolder]:
-        sel = self.quest_table.selectionModel().selectedRows() if self.quest_table.selectionModel() else []
-        if not sel:
-            return None
-        item = self.quest_table.item(sel[0].row(), 4)
-        if item is None:
-            return None
-        remote = item.data(Qt.UserRole)
-        for rec in self._quest_rows:
-            if rec.remote_dir == remote:
-                return rec
+        pairs = self._selected_quest_jsons()
+        if pairs:
+            return pairs[0][0]
         return None
 
     def _show_all_neons(self) -> None:
@@ -869,10 +949,10 @@ class PullGui(QMainWindow):
             QMessageBox.information(
                 self,
                 "Match Quest",
-                "Select a Quest folder row first (left table), then Match selected Quest.",
+                "Select a Quest JSON row first (left table), then Match selected Quest.",
             )
             return
-        if not folder.json_names:
+        if not folder.json_names and not folder.all_json_names:
             QMessageBox.information(self, "Match Quest", f"No JSON in {folder.folder}.")
             return
         if not self._neon_rows:

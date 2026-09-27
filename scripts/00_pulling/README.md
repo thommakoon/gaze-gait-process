@@ -2,9 +2,13 @@
 
 GUI to pick **Quest** vs **Neon** ADB serials, then list what to pull later:
 
-- **Quest JSON** — search by participant `sub`. Folders are `<sub>-<subsub>`
-  (`0=Ring, 1=Rectangle, 2=PracticeRing, 3=PracticeRectangle`) under
-  `/Android/data/com.PracticeMG.MRstress/files/` (also Practice / Pro APKs).
+- **Quest JSON** — search by participant `sub`. One row per JSON file.
+  **Latest per cursor/stream only** (default) hides older takes and shows the newest
+  for each `_cursorX_streamY_` pair (**9** per bout). Uncheck to list every JSON on
+  the Quest. Ctrl/Shift-click rows to choose which files to pull (not the whole bout).
+  Full session is **36** files when pulling all latest (4 bouts × 9). Folders
+  `<sub>-<subsub>` (`0=Ring, 1=Rectangle, 2=PracticeRing, 3=PracticeRectangle`)
+  under `/Android/data/com.PracticeMG.MRstress/files/` (also Practice / Pro APKs).
 - **Neon Export** — list folders in `Documents/Neon Export` (Companion USB export)
   with **duration** from `info.json`. **Match selected Quest** keeps the one whose
   `start_time`+`duration` overlaps the selected Quest JSON timeline

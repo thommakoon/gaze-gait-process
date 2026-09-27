@@ -23,6 +23,17 @@ _CURSOR_TO_INTERACTION = {
     "cursorhead": "HeadPinch",
     "cursorhand": "HandPinch",
 }
+_VARIANT_TO_INTERACTION = {
+    "head": "HeadPinch",
+    "hand": "HandPinch",
+    "eye": "EyePinch",
+}
+_CURSOR_STREAM_RE = re.compile(
+    r"_cursor(Head|Hand|Eye)_stream(Head|Hand|Eye)_",
+    re.IGNORECASE,
+)
+_JSON_TS_RE = re.compile(r"_(\d{10,14})[A-Za-z]*\.json$", re.IGNORECASE)
+_VARIANT_ORDER = ("head", "hand", "eye")
 _FOLDER_RE = re.compile(r"^(\d+)-(\d+)$")
 _DIR_MARK = "===DIR==="
 _END_DIR = "===ENDDIR==="
@@ -45,7 +56,9 @@ class QuestJsonFolder:
     subsub: int
     folder: str
     remote_dir: str
+    all_json_names: list[str] = field(default_factory=list)
     json_names: list[str] = field(default_factory=list)
+    json_skipped: int = 0
 
     @property
     def speed(self) -> str:
@@ -112,7 +125,7 @@ fi
 for d in {qroot}/*; do
   [ -d "$d" ] || continue
   echo "{_DIR_MARK}$(basename "$d")"
-  ls -1 "$d" 2>/dev/null | grep -i '\\.json$' || true
+  ls -t "$d" 2>/dev/null | grep -i '\\.json$' || true
   echo "{_END_DIR}"
 done
 """
@@ -150,12 +163,61 @@ done
     return out
 
 
+def parse_cursor_stream(name: str) -> Optional[tuple[str, str]]:
+    """Return (Head|Hand|Eye, Head|Hand|Eye) from `_cursorX_streamY_`, else None."""
+    m = _CURSOR_STREAM_RE.search(name)
+    if not m:
+        return None
+    return m.group(1).capitalize(), m.group(2).capitalize()
+
+
+def json_timestamp(name: str) -> int:
+    m = _JSON_TS_RE.search(name)
+    return int(m.group(1)) if m else 0
+
+
+def cursor_stream_label(name: str) -> str:
+    pair = parse_cursor_stream(name)
+    if not pair:
+        return ""
+    return f"{pair[0]}/{pair[1]}"
+
+
+def keep_latest_cursor_stream_jsons(names: list[str]) -> list[str]:
+    """Latest JSON for each `_cursorX_streamY_` pair (9 per bout).
+
+    Includes mixed pairs (e.g. `_cursorEye_streamHead_`). Files without
+    that pattern are dropped. Recency is ``ls -t`` order (newest first).
+    Filename digits are *not* used as the primary key: they are unpadded
+    (``2026827354`` vs ``202682725546``) and would keep an older 02:55 take
+    over a 03:06 redo.
+    """
+    best: dict[tuple[str, str], tuple[tuple, str]] = {}
+    for i, n in enumerate(names):
+        pair = parse_cursor_stream(n)
+        if not pair:
+            continue
+        key = (-i, json_timestamp(n), n)
+        cat = (pair[0].lower(), pair[1].lower())
+        prev = best.get(cat)
+        if prev is None or key > prev[0]:
+            best[cat] = (key, n)
+    out: list[str] = []
+    for cursor in _VARIANT_ORDER:
+        for stream in _VARIANT_ORDER:
+            rec = best.get((cursor, stream))
+            if rec:
+                out.append(rec[1])
+    return out
+
+
 def _quest_from_folder(
     label: str, pkg: str, root: str, folder: str, names: list[str]
 ) -> Optional[QuestJsonFolder]:
     m = _FOLDER_RE.match(folder.strip())
     if not m:
         return None
+    kept = keep_latest_cursor_stream_jsons(names)
     return QuestJsonFolder(
         package_label=label,
         package=pkg,
@@ -163,8 +225,17 @@ def _quest_from_folder(
         subsub=int(m.group(2)),
         folder=folder.strip(),
         remote_dir=f"{root.rstrip('/')}/{folder.strip()}",
-        json_names=list(names),
+        all_json_names=list(names),
+        json_names=kept,
+        json_skipped=max(0, len(names) - len(kept)),
     )
+
+
+def quest_names_for_folder(folder: QuestJsonFolder, latest_only: bool) -> list[str]:
+    """Return JSON filenames to list or pull: latest per cursor/stream, or all on device."""
+    if latest_only:
+        return list(folder.json_names)
+    return list(folder.all_json_names)
 
 
 def filter_quest_by_sub(rows: list[QuestJsonFolder], query: str) -> list[QuestJsonFolder]:
@@ -307,6 +378,10 @@ class NeonMatch:
 
 
 def interaction_from_json_name(name: str) -> Optional[str]:
+    """Map JSON to Head/Hand/EyePinch from the cursor variant (not stream)."""
+    pair = parse_cursor_stream(name)
+    if pair:
+        return _VARIANT_TO_INTERACTION.get(pair[0].lower())
     low = name.lower()
     for token, inter in _CURSOR_TO_INTERACTION.items():
         if token in low:
@@ -329,11 +404,17 @@ def group_jsons_by_interaction(names: list[str]) -> dict[str, list[str]]:
 def pick_timeline_json(names: list[str]) -> str:
     if not names:
         raise ValueError("no JSON in Quest folder")
-    for n in names:
+    matched = [
+        n
+        for n in names
+        if (p := parse_cursor_stream(n)) and p[0].lower() == p[1].lower()
+    ]
+    pool = matched or names
+    for n in pool:
         low = n.lower()
         if "streameye" in low or "cursoreye" in low:
             return n
-    return names[0]
+    return pool[0]
 
 
 def _first_last_int_from_grep(stdout: str) -> Optional[tuple[int, int]]:

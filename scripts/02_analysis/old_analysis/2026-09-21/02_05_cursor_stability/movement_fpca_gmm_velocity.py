@@ -491,7 +491,7 @@ def main() -> None:
             ax = axes[r, c]
             prim = PRIMARY[inter]
             # rebuild means from assignments + need X — recompute quickly from mats not available
-            # load assignments and we don't have full curves; re-extract from saved? 
+            # load assignments and we don't have full curves; re-extract from saved?
             # Instead re-read cluster means by re-fitting is heavy.
             # Save cluster means during loop — add file per stem. For now use assign peak hist.
             a = assign[

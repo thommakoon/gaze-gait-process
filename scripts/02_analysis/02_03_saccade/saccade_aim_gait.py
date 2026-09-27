@@ -30,7 +30,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from _paths import DATA_ROOT, INTERACTIONS, STAGE_DIRS, add_bout_args, bout_dir, bout_labels, scan_bout_names
+from _paths import DATA_ROOT, INTERACTIONS, STAGE_DIRS, add_bout_args, analysis_out, bout_dir, bout_labels, scan_bout_names
 from fitts_gait_onset import harmonic_k_fit, sweep_harmonic
 from gait_smooth_plot import mark_ic_phases, overlay_harmonic_smooth, save_gaze_count_vs_gait
 from gaze_target_stride import load_lf_strides_bout, stride_pct_histogram
@@ -259,7 +259,7 @@ def main() -> None:
                         )
                     )
 
-    out = DATA_ROOT / "participants" / "_saccade_aim_gait"
+    out = analysis_out(__file__)
     out.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(metas).to_csv(out / "summary.csv", index=False)
 

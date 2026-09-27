@@ -83,7 +83,11 @@ def find_export_dir(session_dir: Path) -> Path:
     matches = sorted(session_dir.glob("*_export"))
     if not matches:
         # Companion dated folder or any nested gaze.csv under Motorola
-        nested = sorted(session_dir.rglob(NEON_GAZE))
+        nested = sorted(
+            p
+            for p in session_dir.rglob(NEON_GAZE)
+            if not any(part.startswith("_") for part in p.relative_to(session_dir).parts)
+        )
         if len(nested) == 1:
             return nested[0].parent
         if not nested:

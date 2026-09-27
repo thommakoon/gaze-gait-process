@@ -80,6 +80,8 @@ def find_raw_recording(motorola_dir: Path) -> Path:
     hits: list[Path] = []
     for info in sorted(motorola_dir.rglob(INFO_JSON)):
         rec = info.parent
+        if any(p.startswith("_") for p in rec.relative_to(motorola_dir).parts):
+            continue
         if (rec / GAZE_CSV).is_file() or _first(rec, "gaze *.raw") is not None:
             hits.append(rec)
     if len(hits) == 1:

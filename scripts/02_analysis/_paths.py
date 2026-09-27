@@ -28,6 +28,28 @@ DEFAULT_SUBJECT = "imu_thom_2026_06_06"
 
 PARTICIPANTS = DATA_ROOT / "participants"
 
+# Cohort-level plots/CSVs (not per-bout). Mirrors scripts/02_analysis:
+#   02_05_cursor_stability/phase_ic_counts.py
+#     -> data/participants/_02_analysis/02_05_cursor_stability/phase_ic_counts/
+ANALYSIS_SCRIPTS = Path(__file__).resolve().parent
+COHORT_OUT_ROOT = PARTICIPANTS / "_02_analysis"
+
+
+def analysis_out(script: str | Path) -> Path:
+    """Output folder for a 02_analysis script, same relative path as the .py.
+
+    Pass ``__file__`` from the writer, or ``\"02_05_cursor_stability/phase_ic_counts.py\"``
+    from a reader.
+    """
+    raw = Path(script)
+    p = raw if raw.is_absolute() else (ANALYSIS_SCRIPTS / raw)
+    try:
+        rel = p.resolve().relative_to(ANALYSIS_SCRIPTS.resolve())
+    except ValueError:
+        rel = Path(p.name)
+    return COHORT_OUT_ROOT / rel.with_suffix("")
+
+
 STAGE_DIRS = {
     "raw": "00_raw",
     "corrected": "01_corrected",

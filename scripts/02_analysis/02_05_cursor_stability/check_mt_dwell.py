@@ -38,6 +38,7 @@ from _paths import (
     INTERACTIONS,
     STAGE_DIRS,
     add_bout_args,
+    analysis_out,
     bout_dir,
     bout_labels,
     is_practice_bout,
@@ -161,7 +162,7 @@ def parse_args() -> argparse.Namespace:
         "--out-dir",
         type=Path,
         default=None,
-        help="Default: data/participants/_mt_dwell_check/",
+        help="Default: data/participants/_02_analysis/02_05_cursor_stability/check_mt_dwell/",
     )
     return p.parse_args()
 
@@ -196,7 +197,7 @@ def main() -> None:
     if args.bout_dir:
         bouts = [Path(args.bout_dir)]
 
-    out_dir = args.out_dir or (DATA_ROOT / "participants" / "_mt_dwell_check")
+    out_dir = args.out_dir or analysis_out(__file__)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     summaries: list[dict] = []

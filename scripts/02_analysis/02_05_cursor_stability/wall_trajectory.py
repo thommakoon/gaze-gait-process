@@ -41,7 +41,7 @@ from matplotlib.colors import Normalize
 import numpy as np
 import pandas as pd
 
-from _paths import DATA_ROOT, STAGE_DIRS, add_bout_args, bout_labels, scan_bout_names
+from _paths import DATA_ROOT, STAGE_DIRS, add_bout_args, analysis_out, bout_labels, scan_bout_names
 from check_mt_dwell import discover_quest_bouts
 from fitts_gait_onset import pick_quest_json
 
@@ -161,6 +161,10 @@ def load_trial(qpath: Path) -> tuple[dict, pd.DataFrame, pd.DataFrame]:
             rec["target_x"], rec["target_y"] = world_to_wall(tgt, plane[0], plane[1], plane[2])
         else:
             rec["target_x"] = rec["target_y"] = np.nan
+        ho = _xyz(fr.get("head_origin") or fr.get("headRayOrigin"))
+        hf = _xyz(fr.get("head_forward") or fr.get("headRayDirection"))
+        rec["head_ox"], rec["head_oy"], rec["head_oz"] = float(ho[0]), float(ho[1]), float(ho[2])
+        rec["head_fx"], rec["head_fy"], rec["head_fz"] = float(hf[0]), float(hf[1]), float(hf[2])
         for name in CURSORS:
             rec[f"{name}_wall_valid"] = bool(fr.get(f"{name}_wall_valid"))
             wx = fr.get(f"{name}_wall_x")
@@ -855,7 +859,7 @@ def main() -> None:
             print(f"skip {bout}: {e}")
             continue
         n += 1
-    pooled = DATA_ROOT / "participants" / "_wall_trajectory"
+    pooled = analysis_out(__file__)
     pooled.mkdir(parents=True, exist_ok=True)
     print(f"done {n} bouts. Per bout: <bout>/06_gait_analysis/wall_trajectory/")
 

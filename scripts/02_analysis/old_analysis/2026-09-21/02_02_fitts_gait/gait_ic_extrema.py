@@ -32,7 +32,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from _paths import DATA_ROOT, INTERACTIONS, STAGE_DIRS, add_bout_args, bout_labels, scan_bout_names
+from _paths import DATA_ROOT, INTERACTIONS, STAGE_DIRS, add_bout_args, analysis_out, bout_labels, scan_bout_names
 from check_mt_dwell import discover_quest_bouts
 from fitts_gait_onset import harmonic_curve, sweep_harmonic
 from gait_smooth_plot import harmonic_fit_bundle
@@ -208,7 +208,7 @@ def main() -> None:
                     f"best f={rec['best_f']:.1f} R²={rec['best_r2']:.2f}"
                 )
 
-    out = DATA_ROOT / "participants" / "_gait_ic_extrema"
+    out = analysis_out(__file__)
     out.mkdir(parents=True, exist_ok=True)
     df = pd.DataFrame(rows)
     df.to_csv(out / "summary.csv", index=False)

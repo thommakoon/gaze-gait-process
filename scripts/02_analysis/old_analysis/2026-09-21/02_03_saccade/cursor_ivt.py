@@ -33,7 +33,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from _paths import DATA_ROOT, INTERACTIONS, STAGE_DIRS, add_bout_args, bout_labels, scan_bout_names
+from _paths import DATA_ROOT, INTERACTIONS, STAGE_DIRS, add_bout_args, analysis_out, bout_labels, scan_bout_names
 from check_mt_dwell import discover_quest_bouts
 from fitts_gait_onset import grid_t0_ns, load_pc_offset_ns, ms_to_t_s, pick_quest_json
 from ivt_saccade import (
@@ -430,7 +430,7 @@ def main() -> None:
             f"hand={meta['n_hand']} ({meta['hand_source']})"
         )
 
-    out = DATA_ROOT / "participants" / "_cursor_ivt"
+    out = analysis_out(__file__)
     out.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows).to_csv(out / "summary.csv", index=False)
     print(f"\nWrote {out / 'summary.csv'}")

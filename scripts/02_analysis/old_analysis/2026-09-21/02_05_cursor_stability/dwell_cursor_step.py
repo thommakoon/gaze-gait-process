@@ -34,7 +34,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from _paths import DATA_ROOT, INTERACTIONS, STAGE_DIRS, add_bout_args, bout_dir, bout_labels, scan_bout_names
+from _paths import DATA_ROOT, INTERACTIONS, STAGE_DIRS, add_bout_args, analysis_out, bout_dir, bout_labels, scan_bout_names
 from check_mt_dwell import discover_quest_bouts, split_episode_mt
 from dwell_cursor_angle import _frame_table
 from fitts_gait_onset import pick_quest_json
@@ -371,7 +371,7 @@ def main() -> None:
     for bout in bouts:
         all_rows.extend(run_bout(bout, windows_ms=windows))
 
-    out = DATA_ROOT / "participants" / "_dwell_cursor_step"
+    out = analysis_out(__file__)
     out.mkdir(parents=True, exist_ok=True)
     df = pd.DataFrame(all_rows)
     df.to_csv(out / "summary.csv", index=False)

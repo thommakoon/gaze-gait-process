@@ -39,6 +39,7 @@ from _paths import (
     DATA_ROOT,
     INTERACTIONS,
     add_bout_args,
+    analysis_out,
     bout_labels,
     is_practice_bout,
     is_walking_bout,
@@ -199,7 +200,7 @@ def collect_aim_cursor(bouts: list[Path]) -> pd.DataFrame:
 
 
 def load_cursor_stability() -> pd.DataFrame:
-    path = DATA_ROOT / "participants" / "_dwell_cursor_step" / "summary.csv"
+    path = analysis_out("02_05_cursor_stability/dwell_cursor_step.py") / "summary.csv"
     if not path.is_file():
         raise FileNotFoundError(
             f"Missing {path}. Run: uv run python 02_05_cursor_stability/dwell_cursor_step.py --participants 80 81"
@@ -399,7 +400,7 @@ def main() -> None:
     df = timing.merge(cursor, on=["participant", "speed", "interaction"], how="outer")
     df = df.merge(aim, on=["participant", "speed", "interaction"], how="outer")
 
-    out = DATA_ROOT / "participants" / "_standing_vs_walking"
+    out = analysis_out(__file__)
     out.mkdir(parents=True, exist_ok=True)
     aim.to_csv(out / "aim_cursor_summary.csv", index=False)
     df.to_csv(out / "summary.csv", index=False)

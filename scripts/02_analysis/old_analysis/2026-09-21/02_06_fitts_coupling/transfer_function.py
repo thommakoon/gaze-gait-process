@@ -36,7 +36,7 @@ import numpy as np
 import pandas as pd
 from scipy.signal import butter, coherence, csd, sosfiltfilt, welch
 
-from _paths import DATA_ROOT, STAGE_DIRS, add_bout_args, bout_labels
+from _paths import DATA_ROOT, STAGE_DIRS, add_bout_args, analysis_out, bout_labels
 from _helpers import (
     CURSORS,
     FS_HZ,
@@ -60,7 +60,7 @@ from mark_bad_ic_periods import load_bad_ic_windows
 from wall_trajectory import load_trial
 
 OUT_SUBDIR = "transfer_function"
-POOLED = DATA_ROOT / "participants" / "_transfer_function"
+POOLED = analysis_out(__file__)
 HP_HZ = 0.4
 NPERSEG_S = 2.0
 FMAX_HZ = 12.0

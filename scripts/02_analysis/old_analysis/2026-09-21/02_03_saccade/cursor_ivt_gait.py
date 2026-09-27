@@ -10,8 +10,8 @@ Per bout:
   <bout>/06_gait_analysis/cursor_ivt/count_vs_gait.png
 
 Pooled walking:
-  data/participants/_cursor_ivt/movement_vs_gait.csv
-  data/participants/_cursor_ivt/count_vs_gait.png
+  data/participants/_02_analysis/02_03_saccade/cursor_ivt_gait/movement_vs_gait.csv
+  data/participants/_02_analysis/02_03_saccade/cursor_ivt_gait/count_vs_gait.png
 
 Usage (from scripts/02_analysis/):
     uv run python 02_03_saccade/cursor_ivt_gait.py --participants 11 12 --bout Ring
@@ -37,7 +37,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from _paths import DATA_ROOT, STAGE_DIRS, add_bout_args, bout_labels, is_practice_bout
+from _paths import DATA_ROOT, STAGE_DIRS, add_bout_args, analysis_out, bout_labels, is_practice_bout
 from cursor_ivt import (
     OUT_SUBDIR,
     add_ivt_args,
@@ -173,7 +173,7 @@ def main() -> None:
         if not aligned.empty:
             pooled.append(aligned)
 
-    out = DATA_ROOT / "participants" / "_cursor_ivt"
+    out = analysis_out(__file__)
     out.mkdir(parents=True, exist_ok=True)
     if not pooled:
         print("no walking bouts with gait + I-VT")

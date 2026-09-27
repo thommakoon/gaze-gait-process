@@ -7,7 +7,7 @@ cursor on one bout, with ``speed`` so PracticeRing/PracticeRectangle vs Ring/Rec
 Re-runs ``cursor_ivt.run_bout`` (grid-clock times). Writes:
 
   <bout>/06_gait_analysis/cursor_ivt/summary.csv
-  data/participants/_cursor_ivt/counts.csv
+  data/participants/_02_analysis/02_03_saccade/cursor_ivt_counts/counts.csv
 
 Usage (from scripts/02_analysis/):
     uv run python 02_03_saccade/cursor_ivt_counts.py --participants 11 12 --bout Ring
@@ -30,7 +30,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from _paths import DATA_ROOT, STAGE_DIRS, add_bout_args
+from _paths import DATA_ROOT, STAGE_DIRS, add_bout_args, analysis_out
 from cursor_ivt import (
     OUT_SUBDIR,
     add_ivt_args,
@@ -107,7 +107,7 @@ def main() -> None:
                 f"frac={r.get('frac_movement', float('nan')):.3f}"
             )
 
-    out = DATA_ROOT / "participants" / "_cursor_ivt"
+    out = analysis_out(__file__)
     out.mkdir(parents=True, exist_ok=True)
     if not rows:
         print("no bouts")

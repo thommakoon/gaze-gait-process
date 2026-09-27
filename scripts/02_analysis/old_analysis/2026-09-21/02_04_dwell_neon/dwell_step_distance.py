@@ -37,7 +37,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from _paths import DATA_ROOT, INTERACTIONS, STAGE_DIRS, add_bout_args, bout_dir, bout_labels, scan_bout_names
+from _paths import DATA_ROOT, INTERACTIONS, STAGE_DIRS, add_bout_args, analysis_out, bout_dir, bout_labels, scan_bout_names
 from gait_onset import GaitOnsetTimeline
 from gaze_target_stride import grid_start_utc_ns
 from head_gait_cycle import skip_for_lf_onset
@@ -250,7 +250,7 @@ def main() -> None:
                 print(f"=== {bout} ===")
                 all_rows.extend(run_bout(bout, windows_ms=windows))
 
-    out = DATA_ROOT / "participants" / "_dwell_step_distance"
+    out = analysis_out(__file__)
     out.mkdir(parents=True, exist_ok=True)
     df = pd.DataFrame(all_rows)
     df.to_csv(out / "summary.csv", index=False)

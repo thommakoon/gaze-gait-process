@@ -25,7 +25,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from _paths import DATA_ROOT, STAGE_DIRS, add_bout_args, bout_labels, scan_bout_names
+from _paths import DATA_ROOT, STAGE_DIRS, add_bout_args, analysis_out, bout_labels, scan_bout_names
 from check_mt_dwell import discover_quest_bouts, split_episode_mt
 from fitts_gait_onset import pick_quest_json
 
@@ -163,7 +163,7 @@ def main() -> None:
     p.add_argument("--participants", nargs="+", default=None)
     args = p.parse_args()
     bouts = _collect_bouts(args)
-    out_dir = DATA_ROOT / "participants" / "_dwell_cursor_angle"
+    out_dir = analysis_out(__file__)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     summaries = []

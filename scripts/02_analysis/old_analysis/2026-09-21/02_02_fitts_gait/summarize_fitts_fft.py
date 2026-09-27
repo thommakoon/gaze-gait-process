@@ -28,7 +28,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from _paths import DATA_ROOT, INTERACTIONS, STAGE_DIRS, bout_dir, participant_dir, scan_bout_names
+from _paths import DATA_ROOT, INTERACTIONS, STAGE_DIRS, analysis_out, bout_dir, participant_dir, scan_bout_names
 
 OUT_NAME = "fitts_fft_common"
 
@@ -163,7 +163,7 @@ def parse_args() -> argparse.Namespace:
         "--out-dir",
         type=Path,
         default=None,
-        help="Default: data/participants/_fitts_gait_onset/",
+        help="Default: data/participants/_02_analysis/02_02_fitts_gait/summarize_fitts_fft/",
     )
     return p.parse_args()
 
@@ -172,7 +172,7 @@ def main() -> None:
     args = parse_args()
     parts = [participant_dir(p).name for p in args.participants]
     df = load_all(args.participants, args.speed)
-    out_dir = args.out_dir or (DATA_ROOT / "participants" / "_fitts_gait_onset")
+    out_dir = args.out_dir or analysis_out(__file__)
     out_dir.mkdir(parents=True, exist_ok=True)
     df.to_csv(out_dir / "fft_best_all.csv", index=False)
 

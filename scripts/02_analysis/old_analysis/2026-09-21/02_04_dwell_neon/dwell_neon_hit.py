@@ -34,7 +34,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from _paths import DATA_ROOT, INTERACTIONS, REPO_ROOT, STAGE_DIRS, add_bout_args, bout_dir, bout_labels, resolve_ridge_model, scan_bout_names
+from _paths import DATA_ROOT, INTERACTIONS, REPO_ROOT, STAGE_DIRS, add_bout_args, analysis_out, bout_dir, bout_labels, resolve_ridge_model, scan_bout_names
 
 # OpenEye mapping lives outside scripts/02_analysis
 _OPENEYE_CORE = REPO_ROOT / "external" / "OpenEye" / "quest" / "gui_unit"
@@ -527,7 +527,7 @@ def main() -> None:
                 except Exception as e:
                     print(f"FAIL {bout}: {e}")
 
-    out = DATA_ROOT / "participants" / "_dwell_neon_hit"
+    out = analysis_out(__file__)
     out.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(summaries).to_csv(out / "summary.csv", index=False)
     print(f"Wrote {out / 'summary.csv'}")

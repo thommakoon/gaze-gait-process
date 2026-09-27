@@ -35,7 +35,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import linregress
 
-from _paths import DATA_ROOT, STAGE_DIRS, add_bout_args
+from _paths import DATA_ROOT, STAGE_DIRS, add_bout_args, analysis_out
 from _helpers import (
     MIN_N_WE,
     NEAR_IC_PCT,
@@ -46,7 +46,7 @@ from _helpers import (
 )
 
 OUT_SUBDIR = "fitts_coupling"
-POOLED = DATA_ROOT / "participants" / "_fitts_coupling"
+POOLED = analysis_out(__file__)
 CONDITION_KEYS = [
     "participant",
     "speed_group",

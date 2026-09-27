@@ -43,6 +43,7 @@ from _paths import (
     STAGE_DIRS,
     WALKING_BOUTS,
     add_bout_args,
+    analysis_out,
     is_practice_bout,
     participant_dir,
 )
@@ -55,7 +56,7 @@ INTER_STYLE = {
     "EyePinch": {"label": "Eye", "color": "#2ca02c"},
 }
 
-OUT = DATA_ROOT / "participants" / "_across_people"
+OUT = analysis_out(__file__)
 STEPS = {
     1: "MT / dwell / hit",
     2: "I-VT counts",
@@ -286,7 +287,7 @@ def plot_layout_confirm_count(
     png = out / f"3_confirm_count_vs_gait_{layout}.png"
     fig.savefig(png, dpi=150)
     plt.close(fig)
-    stand = DATA_ROOT / "participants" / "_stand_walk_plots"
+    stand = analysis_out("02_08_stand_walk_plots/plot_stand_walk.py")
     stand.mkdir(parents=True, exist_ok=True)
     (stand / f"confirm_count_vs_gait_{layout}.png").write_bytes(png.read_bytes())
 
@@ -361,8 +362,8 @@ def _bar_stand_walk(across: pd.DataFrame, metric: str, title: str, ylabel: str, 
 
 
 def analysis_1(people: list[str], out: Path) -> None:
-    ep = read_csv(DATA_ROOT / "participants" / "_mt_dwell_check" / "episodes_mt_dwell_all.csv")
-    summary = read_csv(DATA_ROOT / "participants" / "_mt_dwell_check" / "summary.csv")
+    ep = read_csv(analysis_out("02_05_cursor_stability/check_mt_dwell.py") / "episodes_mt_dwell_all.csv")
+    summary = read_csv(analysis_out("02_05_cursor_stability/check_mt_dwell.py") / "summary.csv")
     if ep.empty and summary.empty:
         skip("analysis 1 — run check_mt_dwell.py first")
         return
@@ -405,11 +406,25 @@ def analysis_1(people: list[str], out: Path) -> None:
         "MT (s)",
         out / "1_mt.png",
     )
+    _bar_stand_walk(
+        across,
+        "median_dwell_s",
+        "Median dwell (first hit→confirm; mean±SE of person medians)",
+        "Dwell (s)",
+        out / "1_dwell.png",
+    )
+    _bar_stand_walk(
+        across,
+        "hit_rate",
+        "Hit rate  (mean±SE; walk cycles 2–3 vs standing)",
+        "Hit rate",
+        out / "1_hit_rate.png",
+    )
     print(f"1  person cells={len(person)}  N={person['participant'].nunique() if not person.empty else 0}")
 
 
 def analysis_2(people: list[str], out: Path) -> None:
-    df = read_csv(DATA_ROOT / "participants" / "_cursor_ivt" / "counts.csv")
+    df = read_csv(analysis_out("02_03_saccade/cursor_ivt_counts.py") / "counts.csv")
     if df.empty:
         skip("analysis 2 — run cursor_ivt_counts.py first")
         return
@@ -559,7 +574,7 @@ def analysis_3(people: list[str], out: Path) -> None:
             png = out / f"3_confirm_count_vs_gait_{lay}_pooled.png"
             fig.savefig(png, dpi=150)
             plt.close(fig)
-            stand = DATA_ROOT / "participants" / "_stand_walk_plots"
+            stand = analysis_out("02_08_stand_walk_plots/plot_stand_walk.py")
             stand.mkdir(parents=True, exist_ok=True)
             (stand / f"confirm_count_vs_gait_{lay}_pooled.png").write_bytes(png.read_bytes())
     print(f"3  person cells={len(person)}  N={person['participant'].nunique()}")
@@ -592,8 +607,8 @@ def analysis_4(people: list[str], out: Path) -> None:
 
 
 def analysis_5(people: list[str], out: Path) -> None:
-    fits = read_csv(DATA_ROOT / "participants" / "_fitts_coupling" / "fitts_regression.csv")
-    we = read_csv(DATA_ROOT / "participants" / "_fitts_coupling" / "we_by_condition.csv")
+    fits = read_csv(analysis_out("02_06_fitts_coupling/effective_fitts.py") / "fitts_regression.csv")
+    we = read_csv(analysis_out("02_06_fitts_coupling/effective_fitts.py") / "we_by_condition.csv")
     if fits.empty or "participant" not in fits.columns:
         skip("analysis 5 — run effective_fitts.py first (need person-level fits)")
         return
@@ -625,7 +640,7 @@ def analysis_5(people: list[str], out: Path) -> None:
 
 
 def analysis_6(people: list[str], out: Path) -> None:
-    person = read_csv(DATA_ROOT / "participants" / "_transfer_function" / "H_f_by_person.csv")
+    person = read_csv(analysis_out("02_06_fitts_coupling/transfer_function.py") / "H_f_by_person.csv")
     if person.empty or "participant" not in person.columns:
         skip("analysis 6 — run transfer_function.py first (walking IMU grid)")
         return
@@ -666,7 +681,7 @@ def main() -> None:
     want = set(args.only or STEPS)
     out = args.out_dir or OUT
     out.mkdir(parents=True, exist_ok=True)
-    print(f"Across-people collapse for {', '.join(people)} → {out}")
+    print(f"Across-people collapse for {', '.join(people)} -> {out}")
     fns = {
         1: analysis_1,
         2: analysis_2,

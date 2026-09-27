@@ -1,5 +1,11 @@
 # 02_analysis — gait / Fitts / gaze analysis
 
+**Active vs archive (2026-09-21):** keep-list analyses stay in this tree and in
+`data/participants/_02_analysis/`. Non-keep scripts/outputs were moved to
+`scripts/02_analysis/old_analysis/2026-09-21/` and
+`data/participants/old_analysis/2026-09-21/` (see those READMEs for what was
+tried and how to restore).
+
 Scripts are ordered by pipeline stage (`02_0N_*`). Shared helpers stay at the
 root of this folder.
 
@@ -46,6 +52,15 @@ data/participants/participantN/{Ring,Rectangle,PracticeRing,PracticeRectangle}/{
 
 Main Ring/Rectangle OpenEye calib falls back to PracticeRing/PracticeRectangle (same interaction) when the main bout has none.
 
+Pooled CSVs/plots (not per-bout) mirror this folder under `data/participants/_02_analysis/`:
+
+```
+scripts/02_analysis/02_05_cursor_stability/phase_ic_counts.py
+  -> data/participants/_02_analysis/02_05_cursor_stability/phase_ic_counts/
+```
+
+`analysis_out(__file__)` in `_paths.py` is the mapping. Per-bout products stay in `<bout>/06_gait_analysis/<script_stem>/`.
+
 ---
 
 ## After clean — six analyses
@@ -66,7 +81,7 @@ Standing vs walking **line** plots (Head / Hand / Eye, Ring vs Rectangle) from t
 uv run python 02_08_stand_walk_plots/plot_stand_walk.py
 ```
 
-Writes `data/participants/_stand_walk_plots/` (`final_angle_deg.png`, `movement_time_s.png`, `movement_only_s.png`, `dwell_s.png`, `throughput_bps.png`, `n_fixation.png`). Mean±SE of person medians. Needs `check_mt_dwell` episodes first.
+Writes `data/participants/_02_analysis/02_08_stand_walk_plots/plot_stand_walk/` (`final_angle_deg.png`, `movement_time_s.png`, `movement_only_s.png`, `dwell_s.png`, `throughput_bps.png`, `n_fixation.png`). Mean±SE of person medians. Needs `check_mt_dwell` episodes first.
 
 Restrict with `--bout Ring` and/or `--interaction EyePinch`. `--keep-going` continues after a failed step.
 
@@ -76,7 +91,7 @@ The unit of analysis across people is the **participant**, not the trial. Run ev
 uv run python 02_07_across_people/across_people.py --participants 21 22
 ```
 
-Writes `data/participants/_across_people/`. Person-cell CSVs are the inferential unit (mixed model / RM-ANOVA later). Do not average every trial from everyone.
+Writes `data/participants/_02_analysis/02_07_across_people/across_people/`. Person-cell CSVs are the inferential unit (mixed model / RM-ANOVA later). Do not average every trial from everyone.
 
 | # | Analysis | Per person | Across people |
 |---|----------|------------|----------------|
@@ -93,7 +108,7 @@ Writes `data/participants/_across_people/`. Person-cell CSVs are the inferential
 uv run python 02_05_cursor_stability/check_mt_dwell.py --participant 21
 ```
 
-Writes `data/participants/_mt_dwell_check/`.
+Writes `data/participants/_02_analysis/02_05_cursor_stability/check_mt_dwell/`.
 
 **2. Fixation / saccade counts** (I-VT on eye / head / hand)
 
@@ -101,7 +116,7 @@ Writes `data/participants/_mt_dwell_check/`.
 uv run python 02_03_saccade/cursor_ivt_counts.py --participants 21
 ```
 
-Writes `<bout>/06_gait_analysis/cursor_ivt/` and `data/participants/_cursor_ivt/counts.csv`.
+Writes `<bout>/06_gait_analysis/cursor_ivt/` and `data/participants/_02_analysis/02_03_saccade/cursor_ivt_counts/counts.csv`.
 
 **3. Gait onset** (blue IC area) — walking Ring / Rectangle only. Run IMU gait first:
 
@@ -128,7 +143,7 @@ Quest JSON; all 12. Drops the last 125 ms before pinch from the endpoint and fro
 uv run python 02_06_fitts_coupling/effective_fitts.py --participant 21
 ```
 
-Writes `<bout>/06_gait_analysis/fitts_coupling/` and `data/participants/_fitts_coupling/`.
+Writes `<bout>/06_gait_analysis/fitts_coupling/` and `data/participants/_02_analysis/02_06_fitts_coupling/effective_fitts/`.
 
 **6. Foot → pointer transfer function** H(f)
 
@@ -138,7 +153,7 @@ Needs 200 Hz IMU grid (01_clean). Practice standing has no LF/RF, so H(f) skips 
 uv run python 02_06_fitts_coupling/transfer_function.py --participant 21
 ```
 
-Writes `<bout>/06_gait_analysis/transfer_function/` and `data/participants/_transfer_function/`.
+Writes `<bout>/06_gait_analysis/transfer_function/` and `data/participants/_02_analysis/02_06_fitts_coupling/transfer_function/`.
 
 **7. Across N people** (after 1–6)
 
@@ -148,7 +163,7 @@ Collapses each analysis to one number or curve per person, then mean±SE (and pa
 uv run python 02_07_across_people/across_people.py --participants 21 22
 ```
 
-Writes `data/participants/_across_people/`. Missing inputs are skipped (`run_analyses.py` 1–6 first). Wilcoxon is only reported for N≥6; with N=2 the CSVs still have person cells and t-tests.
+Writes `data/participants/_02_analysis/02_07_across_people/across_people/`. Missing inputs are skipped (`run_analyses.py` 1–6 first). Wilcoxon is only reported for N≥6; with N=2 the CSVs still have person cells and t-tests.
 
 ---
 
@@ -190,7 +205,7 @@ Writes `<bout>/06_gait_analysis/bad_ic_windows.csv` (`kind` = `bad_ic` or `pause
 | Head position vs gait onset | `02_02_fitts_gait/head_gait_cycle.py` | `06_gait_analysis/head_gait_cycle/` |
 | Target / first-hit / MT / confirm / dwell vs gait | `02_02_fitts_gait/fitts_gait_onset.py` | `06_gait_analysis/fitts_gait_onset/` |
 | Cursor angular speed vs LF gait (aiming) | `02_02_fitts_gait/cursor_gait_speed.py` | `06_gait_analysis/cursor_gait_speed/` |
-| Smooth IC peak/trough check | `02_02_fitts_gait/gait_ic_extrema.py` | `data/participants/_gait_ic_extrema/` |
+| Smooth IC peak/trough check | `02_02_fitts_gait/gait_ic_extrema.py` | `data/participants/_02_analysis/02_02_fitts_gait/gait_ic_extrema/` |
 
 ```bash
 uv run python 02_02_fitts_gait/run_fitts_gait_pipeline.py --participants 11 12 --bout Ring
@@ -217,7 +232,7 @@ uv run python 02_03_saccade/run_saccade_stride_fourier.py --session 20260606_135
 uv run python 02_03_saccade/plot_saccade_stride_pct.py --session 20260606_135203
 ```
 
-`cursor_ivt_counts` writes `data/participants/_cursor_ivt/counts.csv` (no standing vs walking test yet).
+`cursor_ivt_counts` writes `data/participants/_02_analysis/02_03_saccade/cursor_ivt_counts/counts.csv` (no standing vs walking test yet).
 `cursor_ivt_gait` histograms movement onsets vs LF IC (PracticeRing / PracticeRectangle skipped).
 
 Default IVT: **500 px/s** (eye), **25 / 40 deg/s** (head / hand), min duration **20 ms**.
@@ -250,7 +265,7 @@ uv run python 02_05_cursor_stability/wall_trajectory.py --participants 11 12 --b
 ```
 
 `standing_vs_walking` needs `dwell_cursor_step` summary first. Outputs:
-`data/participants/_standing_vs_walking/`.
+`data/participants/_02_analysis/02_05_cursor_stability/standing_vs_walking/`.
 
 `wall_trajectory` redraws the Fitts wall (ring discs / two-rect bars) from logged targets and overlays eye/head/hand wall-hit paths coloured by time. Per bout: `06_gait_analysis/wall_trajectory/`. Add `--per-step` for one figure per selection.
 
@@ -262,8 +277,8 @@ Does not re-run clock sync or IC detection. Consumes Quest JSON, optional IMU ga
 
 | Analysis | Script | Output |
 |----------|--------|--------|
-| W_e / ID_e / TP_e, ballistic vs homing, pinch-cut | `02_06_fitts_coupling/effective_fitts.py` | `06_gait_analysis/fitts_coupling/` + `data/participants/_fitts_coupling/` |
-| H(f) foot accel → pointer speed | `02_06_fitts_coupling/transfer_function.py` | `06_gait_analysis/transfer_function/` + `data/participants/_transfer_function/` |
+| W_e / ID_e / TP_e, ballistic vs homing, pinch-cut | `02_06_fitts_coupling/effective_fitts.py` | `06_gait_analysis/fitts_coupling/` + `data/participants/_02_analysis/02_06_fitts_coupling/effective_fitts/` |
+| H(f) foot accel → pointer speed | `02_06_fitts_coupling/transfer_function.py` | `06_gait_analysis/transfer_function/` + `data/participants/_02_analysis/02_06_fitts_coupling/transfer_function/` |
 
 ```bash
 uv run python 02_06_fitts_coupling/effective_fitts.py --participant 21

@@ -10,7 +10,7 @@ uv run python 02_08_stand_walk_plots/plot_stand_walk.py
 uv run python 02_08_stand_walk_plots/plot_stand_walk.py --participants 22 32
 ```
 
-Writes `data/participants/_stand_walk_plots/`:
+Writes `data/participants/_02_analysis/02_08_stand_walk_plots/plot_stand_walk/`:
 
 | File | Metric |
 |------|--------|

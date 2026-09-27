@@ -49,13 +49,12 @@ from _paths import (
     PARTICIPANTS,
     STAGE_DIRS,
     add_bout_args,
+    analysis_out,
     bout_dir,
 )
 from across_people import collapse, group_of, layout_of, part_name
-from cursor_ivt import DEFAULT_HAND_DEG_S, DEFAULT_HEAD_DEG_S, DEPTH_M, wall_speed_deg_s
 from fitts_iso import assign_id_repetition, keep_id_reps
 from fitts_gait_onset import pick_quest_json
-from ivt_saccade import compute_ivt_still_intervals
 from wall_trajectory import (
     drawn_layout_windows,
     last_on_start_from_xy,
@@ -63,17 +62,14 @@ from wall_trajectory import (
     window_target_at,
 )
 
-OUT = DATA_ROOT / "participants" / "_stand_walk_plots"
+OUT = analysis_out(__file__)
 DEFAULT_FIRST, DEFAULT_LAST = 22, 32
 PINCH_EXCLUDE_S = 0.125
 MIN_FIXATION_MS = 80.0
 SPEED_SMOOTH_FRAMES = 5
 ACTIVE_CURSOR = {"HeadPinch": "head", "HandPinch": "hand", "EyePinch": "eye"}
-FIXATION_THR_DEG_S = {
-    "head": DEFAULT_HEAD_DEG_S,
-    "hand": DEFAULT_HAND_DEG_S,
-    "eye": DEFAULT_HEAD_DEG_S,
-}
+# Filled lazily when fixation is requested (cursor_ivt may be under old_analysis).
+FIXATION_THR_DEG_S: dict[str, float] = {}
 
 CURSOR = {
     "HeadPinch": {"label": "Head", "color": "#1f77b4", "marker": "o"},
@@ -133,7 +129,7 @@ def annotate(df: pd.DataFrame) -> pd.DataFrame:
 
 def load_mt_episodes(people: list[str]) -> pd.DataFrame:
     frames: list[pd.DataFrame] = []
-    pooled = DATA_ROOT / "participants" / "_mt_dwell_check" / "episodes_mt_dwell_all.csv"
+    pooled = analysis_out("02_05_cursor_stability/check_mt_dwell.py") / "episodes_mt_dwell_all.csv"
     if pooled.is_file():
         frames.append(pd.read_csv(pooled))
     for person in people:
@@ -229,6 +225,17 @@ def attach_quest_trial_metrics(
 
         still: list[tuple[float, float, float]] | None = None
         if want_fixation:
+            from cursor_ivt import DEFAULT_HAND_DEG_S, DEFAULT_HEAD_DEG_S, DEPTH_M, wall_speed_deg_s
+            from ivt_saccade import compute_ivt_still_intervals
+
+            if not FIXATION_THR_DEG_S:
+                FIXATION_THR_DEG_S.update(
+                    {
+                        "head": DEFAULT_HEAD_DEG_S,
+                        "hand": DEFAULT_HAND_DEG_S,
+                        "eye": DEFAULT_HEAD_DEG_S,
+                    }
+                )
             if cursor:
                 t_s, speed, _src = wall_speed_deg_s(frames, cursor, DEPTH_M)
                 speed = (

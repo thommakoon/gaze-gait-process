@@ -2,10 +2,15 @@
 """Build a shared 200 Hz UTC grid from 02_cleaned session files.
 
 Each stream is linearly interpolated onto the same ``t_utc_ns`` axis (5 ms step)
-over the overlap window [max(starts), min(ends)] of foot + Neon. Optional Quest
-(``quest_100hz.csv``) is interpolated onto that same grid (NaN outside Quest
-support). Discrete Quest columns (step_num, neon_gaze_t_ns, …) are deferred to
-Phase 6 — not linearly interpolated.
+over an overlap window [max(starts), min(ends)]:
+
+- ``foot-neon`` (default, walking): LF + RF + Neon head/gaze
+- ``foot``: LF + RF only
+- ``neon-quest`` (standing / Practice): Neon head + gaze (+ Quest if present)
+
+Optional Quest (``quest_100hz.csv``) is interpolated onto that same grid (NaN
+outside Quest support). Discrete Quest columns (step_num, neon_gaze_t_ns, …)
+are deferred to Phase 6 — not linearly interpolated.
 
 Outputs under <output-root>/<session_id>/:
     grid_200hz_meta.csv
@@ -108,6 +113,14 @@ def find_foot_csvs(session_dir: Path) -> tuple[Path, Path]:
     return lf[0], rf[0]
 
 
+def find_foot_csvs_optional(session_dir: Path) -> tuple[Path | None, Path | None]:
+    lf = sorted(session_dir.glob("LF_imu_fused_*.csv"))
+    rf = sorted(session_dir.glob("RF_imu_fused_*.csv"))
+    if len(lf) == 1 and len(rf) == 1:
+        return lf[0], rf[0]
+    return None, None
+
+
 def resolve_quest_csv(session_dir: Path, quest_csv: Path | None) -> Path | None:
     if quest_csv is not None:
         if not quest_csv.is_file():
@@ -203,7 +216,6 @@ def run_session(
     require_quest: bool = False,
     overlap: str = "foot-neon",
 ) -> Path:
-    lf_path, rf_path = find_foot_csvs(session_dir)
     head_path = session_dir / HEAD_NAME
     gaze_path = session_dir / GAZE_NAME
     if not head_path.is_file() or not gaze_path.is_file():
@@ -216,10 +228,30 @@ def run_session(
             f"(and --quest-csv not set)"
         )
 
+    lf_path: Path | None
+    rf_path: Path | None
+    if overlap == "neon-quest":
+        lf_path, rf_path = find_foot_csvs_optional(session_dir)
+    else:
+        lf_path, rf_path = find_foot_csvs(session_dir)
+
     starts, ends = [], []
-    overlap_paths = (lf_path, rf_path) if overlap == "foot" else (lf_path, rf_path, head_path, gaze_path)
+    if overlap == "foot":
+        overlap_paths: list[Path] = [lf_path, rf_path]  # type: ignore[list-item]
+    elif overlap == "neon-quest":
+        # Standing: window from Neon only. Quest is interpolated onto that grid
+        # (may be partial / empty if sync is off — do not shrink the Neon window).
+        overlap_paths = [head_path, gaze_path]
+    else:
+        overlap_paths = [lf_path, rf_path, head_path, gaze_path]  # type: ignore[list-item]
+
     for p in overlap_paths:
-        col = FOOT_TS if "imu_fused" in p.name else NEON_TS
+        if "imu_fused" in p.name:
+            col = FOOT_TS
+        elif p.name == QUEST_NAME or p.name.endswith(QUEST_NAME):
+            col = QUEST_TS
+        else:
+            col = NEON_TS
         t = pd.read_csv(p, usecols=[col])[col].astype(np.int64)
         starts.append(int(t.min()))
         ends.append(int(t.max()))
@@ -231,8 +263,6 @@ def run_session(
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    lf = pd.read_csv(lf_path)
-    rf = pd.read_csv(rf_path)
     head = pd.read_csv(head_path)
     gaze = pd.read_csv(gaze_path)
 
@@ -241,15 +271,21 @@ def run_session(
     gaze_skip = skip | {"blink id"}  # sparse event id — not for linear interp
     gaze_cols = [c for c in gaze.select_dtypes(include=[np.number]).columns if c not in gaze_skip]
 
-    lf_g = interp_stream(lf, FOOT_TS, FOOT_VALUE_COLS, t_grid)
-    rf_g = interp_stream(rf, FOOT_TS, FOOT_VALUE_COLS, t_grid)
+    lf_g = rf_g = None
+    lf_src_rows = rf_src_rows = 0
+    if lf_path is not None and rf_path is not None:
+        lf = pd.read_csv(lf_path)
+        rf = pd.read_csv(rf_path)
+        lf_src_rows, rf_src_rows = len(lf), len(rf)
+        lf_g = interp_stream(lf, FOOT_TS, FOOT_VALUE_COLS, t_grid)
+        rf_g = interp_stream(rf, FOOT_TS, FOOT_VALUE_COLS, t_grid)
+        lf_out = out_dir / lf_path.name.replace(".csv", "_200hz.csv")
+        rf_out = out_dir / rf_path.name.replace(".csv", "_200hz.csv")
+        lf_g.to_csv(lf_out, index=False)
+        rf_g.to_csv(rf_out, index=False)
+
     head_g = interp_stream(head, NEON_TS, head_cols, t_grid)
     gaze_g = interp_stream(gaze, NEON_TS, gaze_cols, t_grid)
-
-    lf_out = out_dir / lf_path.name.replace(".csv", "_200hz.csv")
-    rf_out = out_dir / rf_path.name.replace(".csv", "_200hz.csv")
-    lf_g.to_csv(lf_out, index=False)
-    rf_g.to_csv(rf_out, index=False)
     blinks_path = session_dir / BLINKS_NAME
     if blinks_path.is_file():
         blinks = pd.read_csv(blinks_path)
@@ -298,14 +334,15 @@ def run_session(
         "t_end_utc_ns": t_end,
         "n_grid": n_grid,
         "duration_s": duration_s,
-        "lf_valid_frac": valid_frac(lf_g, FOOT_VALUE_COLS),
-        "rf_valid_frac": valid_frac(rf_g, FOOT_VALUE_COLS),
+        "overlap": overlap,
+        "lf_valid_frac": valid_frac(lf_g, FOOT_VALUE_COLS) if lf_g is not None else np.nan,
+        "rf_valid_frac": valid_frac(rf_g, FOOT_VALUE_COLS) if rf_g is not None else np.nan,
         "head_valid_frac": valid_frac(head_g, head_cols),
         "gaze_valid_frac": valid_frac(gaze_g, gaze_cols),
         "eye_state_valid_frac": valid_frac(eye_g, eye_cols) if eye_g is not None else np.nan,
         "quest_valid_frac": valid_frac(quest_g, quest_cols) if quest_g is not None else np.nan,
-        "lf_src_rows": len(lf),
-        "rf_src_rows": len(rf),
+        "lf_src_rows": lf_src_rows,
+        "rf_src_rows": rf_src_rows,
         "head_src_rows": len(head),
         "gaze_src_rows": len(gaze),
         "eye_state_src_rows": eye_src_rows,
@@ -323,15 +360,15 @@ def run_session(
     e_frac = meta.eye_state_valid_frac.iloc[0]
     e_str = f"{e_frac:.3f}" if pd.notna(e_frac) else "n/a"
     print(
-        f"Valid fraction: LF {meta.lf_valid_frac.iloc[0]:.3f}  "
-        f"RF {meta.rf_valid_frac.iloc[0]:.3f}  "
+        f"Valid fraction: LF {meta.lf_valid_frac.iloc[0] if pd.notna(meta.lf_valid_frac.iloc[0]) else float('nan'):.3f}  "
+        f"RF {meta.rf_valid_frac.iloc[0] if pd.notna(meta.rf_valid_frac.iloc[0]) else float('nan'):.3f}  "
         f"head {meta.head_valid_frac.iloc[0]:.3f}  "
         f"gaze {meta.gaze_valid_frac.iloc[0]:.3f}  "
         f"eye {e_str}  quest {q_str}"
     )
     if quest_path is not None and (pd.isna(q_frac) or q_frac == 0.0):
         print(
-            "Note: quest_valid_frac=0 - Quest t_utc_ns does not overlap foot+Neon "
+            "Note: quest_valid_frac=0 - Quest t_utc_ns does not overlap the grid window "
             "(expected if sync.json / trial are from a different session)."
         )
     print(f"Wrote {out_dir}")
@@ -364,9 +401,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--overlap",
-        choices=("foot-neon", "foot"),
+        choices=("foot-neon", "foot", "neon-quest"),
         default="foot-neon",
-        help="Grid window: foot+Neon (default) or foot IMU only (when Neon is a different take)",
+        help=(
+            "Grid window: foot+Neon (default walking), foot IMU only, "
+            "or Neon(+Quest) for standing/Practice"
+        ),
     )
     args = parser.parse_args()
 

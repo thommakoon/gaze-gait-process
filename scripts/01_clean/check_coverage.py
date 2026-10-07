@@ -6,7 +6,8 @@
 
 **post** (after grid, or after export on standing): same clock?
   Walking: ``03_grid_200hz/grid_200hz_meta.csv`` valid fractions.
-  Standing: Quest CSV vs Neon ``gaze.csv`` overlap (no foot grid).
+  Standing: prefer ``03_grid_200hz`` gaze/quest fractions when present;
+  else Quest CSV vs Neon ``gaze.csv`` overlap.
 
 Usage (from scripts/01_clean/):
     uv run python check_coverage.py --participant 26 --bout Ring --interaction EyePinch --stage pre
@@ -341,7 +342,33 @@ def check_post(bout: Path, *, min_overlap_s: float, warn_quest_frac: float, fail
         report["ok"] = not errors
         return report
 
-    # Standing: no foot grid. Quest CSV vs Neon gaze after export.
+    # Standing: prefer Neon(+Quest) 200 Hz grid when present; else raw overlap.
+    meta_p = stage_dir(bout, "grid") / "grid_200hz_meta.csv"
+    if meta_p.is_file():
+        row = pd.read_csv(meta_p).iloc[0].to_dict()
+        report["grid"] = {
+            "duration_s": float(row.get("duration_s", float("nan"))),
+            "lf_valid_frac": float(row.get("lf_valid_frac", float("nan"))),
+            "rf_valid_frac": float(row.get("rf_valid_frac", float("nan"))),
+            "head_valid_frac": float(row.get("head_valid_frac", float("nan"))),
+            "gaze_valid_frac": float(row.get("gaze_valid_frac", float("nan"))),
+            "quest_valid_frac": float(row.get("quest_valid_frac", float("nan"))),
+            "overlap": str(row.get("overlap", "neon-quest")),
+        }
+        gf = report["grid"]["gaze_valid_frac"]
+        if not (gf >= fail_frac):
+            errors.append(f"Neon gaze valid_frac={gf:.3f} (need >={fail_frac})")
+        qf = report["grid"]["quest_valid_frac"]
+        if pd.notna(qf) and not (qf > 0):
+            errors.append(f"Quest valid_frac={qf:.3f} (Quest does not sit on the Neon grid)")
+        elif pd.notna(qf) and qf < warn_quest_frac:
+            warnings.append(
+                f"Quest valid_frac={qf:.3f}: Fitts is a small slice of a long Neon record"
+            )
+        report["ok"] = not errors
+        return report
+
+    # Standing fallback: no grid yet — Quest CSV vs Neon gaze after export.
     try:
         sync = load_sync(bout)
     except (FileNotFoundError, KeyError) as e:

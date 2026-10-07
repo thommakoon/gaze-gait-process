@@ -64,9 +64,17 @@ def load_aim_windows(bout: Path) -> pd.DataFrame:
 
 
 def in_aim_window(onset_s: float, windows: pd.DataFrame) -> bool:
+    """True if saccade *onset* falls inside any appear→first-hit window."""
     a = windows["appear_t_s"].to_numpy(dtype=float)
     b = windows["first_hit_t_s"].to_numpy(dtype=float)
     return bool(np.any((onset_s >= a) & (onset_s < b)))
+
+
+def overlaps_aim_window(onset_s: float, end_s: float, windows: pd.DataFrame) -> bool:
+    """True if saccade interval [onset, end] overlaps any appear→first-hit window."""
+    a = windows["appear_t_s"].to_numpy(dtype=float)
+    b = windows["first_hit_t_s"].to_numpy(dtype=float)
+    return bool(np.any((onset_s < b) & (end_s > a)))
 
 
 def run_bout(

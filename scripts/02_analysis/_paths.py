@@ -28,26 +28,48 @@ DEFAULT_SUBJECT = "imu_thom_2026_06_06"
 
 PARTICIPANTS = DATA_ROOT / "participants"
 
-# Cohort-level plots/CSVs (not per-bout). Mirrors scripts/02_analysis:
-#   02_05_cursor_stability/phase_ic_counts.py
-#     -> data/participants/_02_analysis/02_05_cursor_stability/phase_ic_counts/
+# Cohort-level plots/CSVs (not per-bout). Mirrors scripts/02_analysis layers:
+#   features/phase_ic_counts.py -> data/.../_02_analysis/features/phase_ic_counts/
 ANALYSIS_SCRIPTS = Path(__file__).resolve().parent
 COHORT_OUT_ROOT = PARTICIPANTS / "_02_analysis"
+
+# Old numbered paths -> layer paths (read/write compatibility).
+_ANALYSIS_OUT_ALIASES: dict[str, str] = {
+    "02_05_cursor_stability/check_mt_dwell.py": "core/check_mt_dwell.py",
+    "02_05_cursor_stability/phase_ic_counts.py": "features/phase_ic_counts.py",
+    "02_05_cursor_stability/cursor_speed_gait_phase_cohort.py": "features/cursor_speed_gait_phase_cohort.py",
+    "02_05_cursor_stability/confirm_attempt_count_gait_all.py": "features/confirm_attempt_count_gait_all.py",
+    "02_05_cursor_stability/confirm_distance_gait_phase.py": "features/confirm_distance_gait_phase.py",
+    "02_03_saccade/saccade_aim_gait_idt.py": "features/saccade_aim_gait_idt.py",
+    "02_08_stand_walk_plots/plot_stand_walk.py": "summaries/plot_stand_walk.py",
+    "02_08_stand_walk_plots/target_factor_hit_mt.py": "summaries/target_factor_hit_mt.py",
+    "02_07_across_people/across_people.py": "summaries/across_people.py",
+}
 
 
 def analysis_out(script: str | Path) -> Path:
     """Output folder for a 02_analysis script, same relative path as the .py.
 
-    Pass ``__file__`` from the writer, or ``\"02_05_cursor_stability/phase_ic_counts.py\"``
-    from a reader.
+    Pass ``__file__`` from the writer, or a path like ``\"features/phase_ic_counts.py\"``.
+    Legacy ``02_0N_...`` paths are remapped to layer folders.
     """
     raw = Path(script)
-    p = raw if raw.is_absolute() else (ANALYSIS_SCRIPTS / raw)
+    if not raw.is_absolute():
+        key = str(raw).replace("\\", "/")
+        if key in _ANALYSIS_OUT_ALIASES:
+            raw = Path(_ANALYSIS_OUT_ALIASES[key])
+        p = ANALYSIS_SCRIPTS / raw
+    else:
+        p = raw
     try:
         rel = p.resolve().relative_to(ANALYSIS_SCRIPTS.resolve())
     except ValueError:
         rel = Path(p.name)
-    return COHORT_OUT_ROOT / rel.with_suffix("")
+    # Remap if __file__ still resolved under an old tree somehow
+    rel_s = str(rel).replace("\\", "/")
+    if rel_s in _ANALYSIS_OUT_ALIASES:
+        rel = Path(_ANALYSIS_OUT_ALIASES[rel_s])
+    return COHORT_OUT_ROOT / Path(rel).with_suffix("")
 
 
 STAGE_DIRS = {

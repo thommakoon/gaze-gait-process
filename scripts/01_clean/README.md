@@ -47,6 +47,9 @@ data/participants/participant0/
 ```
 
 `Bout` ∈ `Ring | Rectangle | PracticeRing | PracticeRectangle`.  
+Practice is standing: Quest + Neon export **and** Neon(+Quest) 200 Hz grid
+(no foot IMU / gait format). Walking Ring/Rectangle still need foot IMU for
+grid/gait.
 `Interaction` ∈ `HeadPinch | HandPinch | EyePinch`.
 
 `--bout` selects the bout folder (`--speed` is the same flag).
@@ -79,7 +82,7 @@ uv run python run_pipeline.py --participant 21 --all --keep-going
 uv run python run_pipeline.py --participant 21 --all --fill
 ```
 
-`--all` runs the 12 cases (`Ring|Rectangle|PracticeRing|PracticeRectangle` × `Head|Hand|EyePinch`). Missing Motorola/Quest raw folders are skipped. Practice bouts are standing: Quest + Neon export only (no LF/RF). Walking Ring/Rectangle still need foot IMU for grid/gait. Coverage checks run automatically (`check_coverage.py`); pass `--skip-coverage` to omit them.
+`--all` runs the 12 cases (`Ring|Rectangle|PracticeRing|PracticeRectangle` × `Head|Hand|EyePinch`). Missing Motorola/Quest raw folders are skipped. Practice bouts are standing: Quest + Neon export and a Neon(+Quest) 200 Hz grid (no LF/RF). Walking Ring/Rectangle still need foot IMU for grid/gait. Coverage checks run automatically (`check_coverage.py`); pass `--skip-coverage` to omit them.
 
 Every stage script also accepts `--bout-dir <path>`.
 
@@ -116,21 +119,11 @@ Step 5 output `05_gait_xsens/`:
 - `blinks.csv`, `events.csv`, `eye_state_200hz.csv` when Neon extras were exported
 - `head_madgwick_200hz.csv`
 
-## Plots / QC (same step number as the stage they check)
-
-| Step | Script |
-|------|--------|
-| chk | `check_coverage.py --stage pre\|post` |
-| 02 | `01_02_correct_utc/plot_imu_t_utc_timeline.py` |
-| 02 | `01_02_correct_utc/check_imu_csv_quality.py` |
-| 02 | `01_02_correct_utc/check_disconnect.py` |
-| 04 | `01_04_grid_200hz/plot_movement_psd.py` |
-| 04 | `01_04_grid_200hz/plot_gaze_head_psd.py` |
-| 05 | `01_05_gait_xsens/plot_vor_interactive.py` |
-| 05 | `01_05_gait_xsens/plot_heel_strike_gaze.py` |
-| 05 | `01_05_gait_xsens/plot_lf_rf_rpy.py` |
+## Coverage check (still here)
 
 ```bash
-uv run python 01_04_grid_200hz/plot_movement_psd.py --session-dir ../../data/participants/participant0/Ring/EyePinch/03_grid_200hz
-uv run python 01_04_grid_200hz/plot_gaze_head_psd.py --session-dir ../../data/participants/participant0/Ring/EyePinch/03_grid_200hz
+uv run python check_coverage.py --stage pre   # or post
 ```
+
+Optional QC plots / IMU scanners were moved to  
+`old_analysis/2026-10-07/scripts/01_clean/` (same relative paths). See that folder’s `README.md`.

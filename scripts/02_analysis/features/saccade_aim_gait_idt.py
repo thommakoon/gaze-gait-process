@@ -2,7 +2,8 @@
 """I-DT saccade count vs LF gait onset during aiming (appear → first hit).
 
 Neon gaze @ 200 Hz → Salvucci-style I-DT fixations → inter-fixation saccades;
-keep onsets inside Fitts aiming windows; assign LF stride phase (0% = IC).
+keep saccades whose interval **overlaps** Fitts aiming windows (not onset-only);
+assign LF stride phase at saccade onset (0% = IC).
 
 Default cohort: unique usable N=24. Writes per-bout outputs and a pooled
 person-mean±SE count-vs-gait figure.
@@ -56,7 +57,7 @@ from idt_saccade import (
     saccades_to_dataframe,
 )
 from mark_bad_ic_periods import load_bad_ic_windows
-from saccade_aim_gait import in_aim_window, load_aim_windows
+from saccade_aim_gait import load_aim_windows, overlaps_aim_window
 
 OUT_SUBDIR = "saccade_aim_gait_idt"
 PHASE_LABEL = "LF stride phase (%)  —  0 = IC, 100 = next IC"
@@ -112,7 +113,7 @@ def run_bout(
 
     rows = []
     for s in all_sac:
-        if not in_aim_window(s.onset_s, aim):
+        if not overlaps_aim_window(s.onset_s, s.end_s, aim):
             continue
         if skip_for_lf_onset(np.array([s.onset_s]), windows_bad)[0]:
             continue
@@ -195,7 +196,7 @@ def run_bout(
         "best_r2": best.get("r2"),
         "r2_f1": f1.get("r2"),
         "r2_f2": f2.get("r2"),
-        "note": "I-DT on Neon gaze_200hz; saccades=inter-fixation; aim appear→first_hit; LF phase",
+        "note": "I-DT on Neon gaze_200hz; saccades=inter-fixation; aim=interval overlap appear→first_hit; LF phase at onset",
     }
     (out_dir / "stats.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
     print(

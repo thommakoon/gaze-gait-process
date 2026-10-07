@@ -141,3 +141,7 @@ scripts/03_viewer/server.err.log
 scripts/03_viewer/server.out.log
 scripts/03_viewer/server.pid
 **/*.f3d
+
+# Archived analysis outputs (scripts OK; data too large)
+old_analysis/**/data/
+

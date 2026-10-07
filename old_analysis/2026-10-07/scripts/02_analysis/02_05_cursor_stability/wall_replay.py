@@ -27,9 +27,10 @@ Meta Quest 3 frustum 110°×96°), or **Both**.
 Usage (from scripts/02_analysis/):
     uv run python 02_05_cursor_stability/wall_replay.py --participant 24 --bout Ring --interaction EyePinch
     uv run python 02_05_cursor_stability/wall_replay.py --participant 24 --bout Ring --interaction EyePinch --lf-ic
+    uv run python 02_05_cursor_stability/wall_replay.py --participant 23 --bout PracticeRing --interaction HeadPinch
 
-In the page: pick Participant / Layout (Ring|Rectangle) / Modality, then Load
-(or just change a dropdown — it auto-loads).
+In the page: pick Participant / Layout (Ring|Rectangle|Practice*) / Modality, then Load
+(or just change a dropdown — it auto-loads). Omit ``--lf-ic`` for practice (standing; no IC flash).
 
 Flagged transits (``transit_ic_jitter`` ``flagged_episodes.csv``): Prev/Next flagged
 jumps to that target's appear. A dropdown picks ``all flagged``, ``jitter_flag``,
@@ -137,8 +138,10 @@ HTML = r"""<!DOCTYPE html>
     </label>
     <label style="display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--muted)">Layout
       <select id="pickBout">
-        <option value="Ring">Ring (2D)</option>
-        <option value="Rectangle">Rectangle (1D)</option>
+        <option value="Ring">Walk · Ring (2D)</option>
+        <option value="Rectangle">Walk · Rectangle (1D)</option>
+        <option value="PracticeRing">Practice · Ring (2D)</option>
+        <option value="PracticeRectangle">Practice · Rectangle (1D)</option>
       </select>
     </label>
     <label style="display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--muted)">Modality
@@ -209,6 +212,7 @@ HTML = r"""<!DOCTYPE html>
     </label>
     <label>trail back <input id="trailBack" type="range" min="0" max="3000" step="50" value="400"> <span class="val" id="trailBackV">400 ms</span></label>
     <label>trail fwd <input id="trailFwd" type="range" min="0" max="3000" step="50" value="400"> <span class="val" id="trailFwdV">400 ms</span></label>
+    <label id="icOnRow" style="display:none"><input id="icOn" type="checkbox" checked> IC highlight</label>
     <label id="icFlashRow" style="display:none">IC flash <input id="icFlash" type="range" min="50" max="2000" step="50" value="500"> <span class="val" id="icFlashV">500 ms</span></label>
   </div>
   <div class="legend" style="margin-top:8px;color:var(--muted)">
@@ -269,6 +273,7 @@ const loadStatus = document.getElementById("loadStatus");
 let trailBackMs = 400;
 let trailFwdMs = 400;
 let icFlashMs = 500;
+let icHighlightOn = true;
 let viewMode = "wall";
 let i = 0, playing = false, lastPlay = 0, playSpeed = 1, playUnix = 0;
 let markA = null, markB = null;
@@ -310,9 +315,14 @@ function applyData() {
   }
   document.getElementById("icLeg").style.display = (DATA.lf_ic_unix_ms || []).length ? "inline" : "none";
   document.getElementById("rfLeg").style.display = (DATA.rf_ic_unix_ms || []).length ? "inline" : "none";
+  const hasIc = ((DATA.lf_ic_unix_ms || []).length || (DATA.rf_ic_unix_ms || []).length) > 0
+    || ((DATA.bad_ic_windows || []).length > 0);
+  document.getElementById("icOnRow").style.display = hasIc ? "flex" : "none";
   document.getElementById("icFlashRow").style.display =
     ((DATA.lf_ic_unix_ms || []).length || (DATA.rf_ic_unix_ms || []).length) ? "flex" : "none";
   document.getElementById("badLeg").style.display = (DATA.bad_ic_windows || []).length ? "inline" : "none";
+  // Keep legend dots in sync with toggle
+  syncIcLegend();
   document.getElementById("blinkLeg").style.display = (DATA.blink_windows || []).length ? "inline" : "none";
   const info = document.getElementById("info");
   if (DATA.blink_note) {
@@ -362,14 +372,31 @@ function refreshAvailableOptions() {
   const avail = new Set((entry && entry.bouts || []).map(b => b.bout + "|" + b.interaction));
   const boutSel = document.getElementById("pickBout");
   const interSel = document.getElementById("pickInter");
-  // keep current selection if available; else first available
   const pairs = entry ? entry.bouts : [];
   if (!pairs.length) return;
+
+  // Enable/disable bout options that exist for this participant (any modality).
+  const boutAvail = new Set(pairs.map(b => b.bout));
+  Array.from(boutSel.options).forEach(o => {
+    o.disabled = !boutAvail.has(o.value);
+  });
+
   const want = boutSel.value + "|" + interSel.value;
   if (!avail.has(want)) {
-    boutSel.value = pairs[0].bout;
-    interSel.value = pairs[0].interaction;
+    // Prefer keeping modality; else first available pair.
+    const sameInter = pairs.find(b => b.interaction === interSel.value && boutAvail.has(b.bout));
+    const pick = sameInter || pairs[0];
+    boutSel.value = pick.bout;
+    interSel.value = pick.interaction;
   }
+
+  // Disable modalities missing for the selected bout.
+  const interAvail = new Set(
+    pairs.filter(b => b.bout === boutSel.value).map(b => b.interaction)
+  );
+  Array.from(interSel.options).forEach(o => {
+    o.disabled = !interAvail.has(o.value);
+  });
 }
 
 async function loadSelectedBout() {
@@ -393,7 +420,7 @@ async function loadSelectedBout() {
 }
 
 document.getElementById("pickPid").addEventListener("change", () => { refreshAvailableOptions(); loadSelectedBout(); });
-document.getElementById("pickBout").addEventListener("change", loadSelectedBout);
+document.getElementById("pickBout").addEventListener("change", () => { refreshAvailableOptions(); loadSelectedBout(); });
 document.getElementById("pickInter").addEventListener("change", loadSelectedBout);
 document.getElementById("loadBout").addEventListener("click", loadSelectedBout);
 
@@ -909,9 +936,9 @@ function draw() {
   const cur = ep >= 0 ? DATA.episodes[ep] : null;
   const endN = cur ? cur.end_num : null;
   const startN = cur ? cur.start_num : null;
-  const badOn = inBadIc(t);
-  const lfOn = !badOn && icFlash(t, DATA.lf_ic_unix_ms);
-  const rfOn = !badOn && icFlash(t, DATA.rf_ic_unix_ms);
+  const badOn = icHighlightOn && inBadIc(t);
+  const lfOn = icHighlightOn && !badOn && icFlash(t, DATA.lf_ic_unix_ms);
+  const rfOn = icHighlightOn && !badOn && icFlash(t, DATA.rf_ic_unix_ms);
   const blinkOn = inBlink(t);
   blinkLabel.classList.toggle("on", blinkOn);
   const i0 = frameAt(t - trailBackMs);
@@ -978,6 +1005,22 @@ document.getElementById("icFlash").value = String(icFlashMs);
 bindMs("trailBack", "trailBackV", (v) => { trailBackMs = v; });
 bindMs("trailFwd", "trailFwdV", (v) => { trailFwdMs = v; });
 bindMs("icFlash", "icFlashV", (v) => { icFlashMs = v; });
+function syncIcLegend() {
+  const show = icHighlightOn;
+  document.getElementById("icLeg").style.display =
+    (show && (DATA.lf_ic_unix_ms || []).length) ? "inline" : "none";
+  document.getElementById("rfLeg").style.display =
+    (show && (DATA.rf_ic_unix_ms || []).length) ? "inline" : "none";
+  document.getElementById("badLeg").style.display =
+    (show && (DATA.bad_ic_windows || []).length) ? "inline" : "none";
+  document.getElementById("icFlashRow").style.display =
+    (show && ((DATA.lf_ic_unix_ms || []).length || (DATA.rf_ic_unix_ms || []).length)) ? "flex" : "none";
+}
+document.getElementById("icOn").addEventListener("change", (e) => {
+  icHighlightOn = !!e.target.checked;
+  syncIcLegend();
+  draw();
+});
 viewModeSel.addEventListener("change", applyViewMode);
 playBtn.addEventListener("click", () => {
   playing = !playing;
@@ -1491,7 +1534,7 @@ COHORT_UNIQUE24 = (
 
 
 def scan_catalog(*, current: dict | None = None, only_ids: tuple[int, ...] | None = COHORT_UNIQUE24) -> dict:
-    from _paths import INTERACTIONS, PARTICIPANTS, WALKING_BOUTS
+    from _paths import INTERACTIONS, PARTICIPANTS, PRACTICE_BOUTS, WALKING_BOUTS
 
     allow = None
     if only_ids is not None:
@@ -1500,6 +1543,9 @@ def scan_catalog(*, current: dict | None = None, only_ids: tuple[int, ...] | Non
     def _pid_num(p: Path) -> int:
         s = p.name.replace("participant", "", 1)
         return int(s) if s.isdigit() else 10**9
+
+    # Walking first, then standing practice (no foot-IC overlay expected).
+    bout_names = tuple(WALKING_BOUTS) + tuple(PRACTICE_BOUTS)
 
     participants = []
     for pdir in sorted(PARTICIPANTS.glob("participant*"), key=_pid_num):
@@ -1510,7 +1556,7 @@ def scan_catalog(*, current: dict | None = None, only_ids: tuple[int, ...] | Non
         if not pdir.name.replace("participant", "", 1).isdigit():
             continue
         bouts = []
-        for speed in WALKING_BOUTS:
+        for speed in bout_names:
             for inter in INTERACTIONS:
                 bout = pdir / speed / inter
                 quest = bout / "00_raw" / "Quest"
@@ -1633,7 +1679,7 @@ def main() -> None:
     Handler.page_html = page.encode("utf-8")
     httpd = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     url = f"http://127.0.0.1:{args.port}/"
-    print(f"{payload['n']} frames  →  {url}")
+    print(f"{payload['n']} frames  ->  {url}")
     if args.lf_ic:
         n_lf = len(payload.get("lf_ic_unix_ms") or [])
         n_rf = len(payload.get("rf_ic_unix_ms") or [])

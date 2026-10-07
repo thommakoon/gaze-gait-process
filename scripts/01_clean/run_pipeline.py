@@ -7,12 +7,12 @@ Chains the stage scripts in order:
     01_01  neon_raw_to_csv + blink/event/eye_state + convert_quest_to_pc_ns
     01_02  correct_imu_t_utc          (walking only)
     01_03  drop_imu_bad_dt            (walking only)
-    01_04  grid_utc_200hz  (+ fill)   (walking only)
+    01_04  grid_utc_200hz  (+ fill)   (walking: foot+Neon; Practice: Neon+Quest)
     01_05  format_foot_xsens_csv      (walking only)
-    check  coverage post                (same clock: grid fractions / standing overlap)
+    check  coverage post                (same clock: grid fractions)
 
-PracticeRing / PracticeRectangle are standing: no LF/RF. Those bouts stop
-after Quest + Neon export.
+PracticeRing / PracticeRectangle are standing: no LF/RF. Those bouts still get
+Neon+Quest export and a Neon(+Quest) 200 Hz grid (no foot IMU / gait format).
 
 Usage (from scripts/01_clean/):
     uv run python run_pipeline.py --participant 21 --bout Ring --interaction EyePinch
@@ -83,13 +83,21 @@ def run_one(flags: list[str], args: argparse.Namespace, *, bout: Path) -> None:
     run_step("01_01_export/neon_raw_to_csv.py", flags)
     run_step("neon_export/export_blink_event_eye_state.py", flags)
     run_step("01_01_export/convert_quest_to_pc_ns.py", flags)
-    # Practice = standing: no foot IMU. Walking Ring/Rectangle still need LF/RF.
+    # Practice = standing: no foot IMU. Still export Neon/Quest and build a
+    # Neon(+Quest) 200 Hz grid for gaze analyses (e.g. I-DT).
     if is_practice_bout(bout.parent.name):
         print(
-            "Practice/standing: Quest+Neon export only "
-            "(no LF/RF — skip IMU correct/grid/gait)",
+            "Practice/standing: export + Neon(+Quest) 200 Hz grid "
+            "(no LF/RF — skip IMU correct / foot gait format)",
             flush=True,
         )
+        run_step("01_01_export/stage_neon_cleaned.py", flags)
+        run_step(
+            "01_04_grid_200hz/grid_utc_200hz.py",
+            flags + grid_extra + ["--overlap", "neon-quest"],
+        )
+        if args.fill:
+            run_step("01_04_grid_200hz/fill_grid_nan_linear.py", flags)
         if not args.skip_coverage:
             run_step("check_coverage.py", flags + ["--stage", "post"])
         return

@@ -23,6 +23,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 import numpy as np
 import pandas as pd
 
@@ -42,6 +43,9 @@ DIST_CONT = (
 CONFIRM_COUNT = (
     analysis_out("features/confirm_attempt_count_gait_all.py")
     / "selection_attempt_phase_across_ALL_success_plus_miss.csv"
+)
+APPEAR_COUNT = (
+    analysis_out("features/appear_count_gait_success.py") / "appear_phase_across.csv"
 )
 CONFIRM_DIST = (
     analysis_out("features/confirm_distance_gait_phase.py")
@@ -146,6 +150,125 @@ def _plot_phase_bars(
         Line2D([0], [0], color=RF_IC_COLOR, lw=0.9, ls=":", label="~RF IC"),
     ]
     fig.legend(handles=handles, loc="upper center", ncol=3, frameon=False, bbox_to_anchor=(0.5, 1.01))
+    fig.tight_layout()
+    tmp = output.with_name(output.stem + "_tmp.png")
+    fig.savefig(tmp, bbox_inches="tight")
+    plt.close(fig)
+    tmp.replace(output)
+
+
+def _plot_confirm_stacked(across: pd.DataFrame, *, output: Path) -> None:
+    """Success count stacked under misses. Bar height is every attempt. One f=2 fit on the total."""
+    df = across.copy()
+    fig, axes = plt.subplots(2, 3, figsize=(12.4, 7.0), sharex=True, sharey=False)
+    for r, (layout, layout_label) in enumerate(LAYOUTS):
+        for c, inter in enumerate(INTERACTIONS):
+            ax = axes[r, c]
+            group = df[
+                (df["layout"].astype(str) == layout)
+                & (df["interaction"].astype(str) == inter)
+            ].sort_values("bin_center")
+            color = MODALITY[inter]["color"]
+            if not group.empty:
+                phase = group["bin_center"].to_numpy(dtype=float)
+                success = group["success_count_mean"].to_numpy(dtype=float)
+                miss = group["miss_count_mean"].to_numpy(dtype=float)
+                total = group["total_count_mean"].to_numpy(dtype=float)
+                total_se = (
+                    group["total_count_se"].fillna(0.0).to_numpy(dtype=float)
+                    if "total_count_se" in group.columns
+                    else np.zeros_like(total)
+                )
+                ax.bar(
+                    phase,
+                    success,
+                    width=9.0,
+                    color=color,
+                    alpha=0.95,
+                    edgecolor="#5C6B73",
+                    linewidth=0.5,
+                )
+                ax.bar(
+                    phase,
+                    miss,
+                    width=9.0,
+                    bottom=success,
+                    color="white",
+                    edgecolor=color,
+                    linewidth=0.8,
+                    hatch="///",
+                )
+                ax.errorbar(
+                    phase,
+                    total,
+                    yerr=total_se,
+                    fmt="none",
+                    ecolor="#2F3A40",
+                    elinewidth=0.9,
+                    capsize=3,
+                )
+                f2 = harmonic_k_fit(phase, total, 2)
+                f2_success = harmonic_k_fit(phase, success, 2)
+                if np.isfinite(f2.get("r2", np.nan)) and "a" in f2:
+                    ax.plot(phase, harmonic_curve(phase, f2), color=F2_COLOR, lw=1.8, ls="--")
+                    ax.text(
+                        0.98,
+                        0.96,
+                        f"total R²={f2['r2']:.2f}",
+                        transform=ax.transAxes,
+                        ha="right",
+                        va="top",
+                        fontsize=8.5,
+                        color="#7D6B9B",
+                    )
+                    print(f"  confirm stacked {layout} {inter}: total R²={f2['r2']:.2f}")
+                if np.isfinite(f2_success.get("r2", np.nan)) and "a" in f2_success:
+                    ax.plot(
+                        phase,
+                        harmonic_curve(phase, f2_success),
+                        color="#3D6B5A",
+                        lw=1.6,
+                        ls="-.",
+                    )
+                    ax.text(
+                        0.98,
+                        0.86,
+                        f"success R²={f2_success['r2']:.2f}",
+                        transform=ax.transAxes,
+                        ha="right",
+                        va="top",
+                        fontsize=8.5,
+                        color="#3D6B5A",
+                    )
+                    print(f"  confirm stacked {layout} {inter}: success R²={f2_success['r2']:.2f}")
+                if "n_people" in group.columns:
+                    n_min = int(group["n_people"].min())
+                    n_max = int(group["n_people"].max())
+                    n_label = f"N={n_min}" if n_min == n_max else f"N={n_min}–{n_max}"
+                    ax.text(0.02, 0.96, n_label, transform=ax.transAxes, ha="left", va="top", fontsize=8.5)
+                upper = float(np.nanmax(total + total_se))
+                ax.set_ylim(0, max(1e-6, 1.38 * upper))
+            ax.axvline(50.0, color=RF_IC_COLOR, lw=0.9, ls=":")
+            ax.set_xlim(0, 100)
+            ax.set_xticks(np.arange(0, 101, 10))
+            ax.grid(axis="y", alpha=0.28)
+            if r == 0:
+                ax.set_title(MODALITY[inter]["label"])
+            if r == 1:
+                ax.set_xlabel("LF gait phase (%)")
+            if c == 0:
+                ax.set_ylabel(f"{layout_label}\nAttempts")
+            else:
+                ax.set_ylabel("Attempts")
+    handles = [
+        Patch(facecolor="#D9D9D9", edgecolor="#5C6B73", label="Solid: successful"),
+        Patch(facecolor="white", edgecolor="#5C6B73", hatch="///", label="Hatched: miss / timeout"),
+        Line2D([0], [0], color="#2F3A40", marker="_", ls="none", markersize=10, label="Total mean ± SE"),
+        Line2D([0], [0], color=F2_COLOR, lw=1.8, ls="--", label="f=2 fit, total"),
+        Line2D([0], [0], color="#3D6B5A", lw=1.6, ls="-.", label="f=2 fit, successful"),
+        Line2D([0], [0], color=RF_IC_COLOR, lw=0.9, ls=":", label="~RF IC"),
+    ]
+    fig.legend(handles=handles, loc="upper center", ncol=3, frameon=False, bbox_to_anchor=(0.5, 1.04))
     fig.tight_layout()
     tmp = output.with_name(output.stem + "_tmp.png")
     fig.savefig(tmp, bbox_inches="tight")
@@ -269,6 +392,273 @@ def _build_pointing_distance_if_needed(*, force: bool = False) -> Path | None:
     return POINT_DIST
 
 
+def _plot_gait_metrics_combined(
+    speed: pd.DataFrame,
+    distance: pd.DataFrame | None,
+    saccades: pd.DataFrame,
+    turns: pd.DataFrame | None = None,
+    *,
+    output: Path,
+) -> None:
+    """Ring on the left, rectangle on the right. Axes zoom to the mean so the f=2 wave shows.
+
+    Distance is optional. Trial onset is not locked to the step, and cursor--target
+    distance falls from leave to first hit by construction, so a phase wave mostly
+    restates when the participant chooses to aim.
+    """
+    r2_color = "#3E4650"
+    rows: list[tuple[pd.DataFrame, str]] = [
+        (speed, "Speed\n(deg/s)"),
+    ]
+    if distance is not None:
+        rows.append((distance, "Distance\n(deg)"))
+    rows.append((saccades, "Saccades"))
+    if turns is not None:
+        turn_df = turns.copy()
+        if "kind" in turn_df.columns:
+            turn_df = turn_df[turn_df["kind"].astype(str) == "turn"]
+        rows.append((turn_df, "Turns"))
+    n_rows = len(rows)
+    fig_h = 5.45 if n_rows == 3 else 6.90
+    top = 0.855 if n_rows == 3 else 0.885
+    bottom = 0.065 if n_rows == 3 else 0.051
+    fig = plt.figure(figsize=(7.3, fig_h))
+    grid = fig.add_gridspec(
+        n_rows,
+        7,
+        width_ratios=[1, 1, 1, 0.22, 1, 1, 1],
+        left=0.07,
+        right=0.99,
+        bottom=bottom,
+        top=top,
+        wspace=0.38,
+        hspace=0.14,
+    )
+    col_for = {0: 0, 1: 1, 2: 2, 3: 4, 4: 5, 5: 6}
+    for block, (layout, layout_label) in enumerate(LAYOUTS):
+        for r, (frame, ylabel) in enumerate(rows):
+            df = frame.copy()
+            if "metric" in df.columns:
+                df = df[df["metric"].astype(str) == "distance_deg"]
+            for c, inter in enumerate(INTERACTIONS):
+                ax = fig.add_subplot(grid[r, col_for[block * 3 + c]])
+                color = MODALITY[inter]["color"]
+                ax.axvline(50.0, color=RF_IC_COLOR, lw=0.7, ls=":", zorder=0)
+                group = df[
+                    (df["layout"].astype(str) == layout)
+                    & (df["interaction"].astype(str) == inter)
+                ].sort_values("bin_center")
+                if not group.empty:
+                    phase = group["bin_center"].to_numpy(dtype=float)
+                    mean = group["mean"].to_numpy(dtype=float)
+                    se = (
+                        group["se"].fillna(0.0).to_numpy(dtype=float)
+                        if "se" in group.columns
+                        else np.zeros_like(mean)
+                    )
+                    ax.bar(
+                        phase,
+                        mean,
+                        width=8.0,
+                        color=color,
+                        alpha=0.9,
+                        edgecolor="#5C6B73",
+                        linewidth=0.35,
+                        zorder=2,
+                    )
+                    ax.errorbar(
+                        phase,
+                        mean,
+                        yerr=se,
+                        fmt="none",
+                        ecolor="#8E989E",
+                        elinewidth=0.85,
+                        capsize=1.6,
+                        capthick=0.7,
+                        zorder=3,
+                    )
+                    f2 = harmonic_k_fit(phase, mean, 2)
+                    if np.isfinite(f2.get("r2", np.nan)):
+                        ax.text(
+                            0.98,
+                            0.97,
+                            f"R²={f2['r2']:.2f}",
+                            transform=ax.transAxes,
+                            ha="right",
+                            va="top",
+                            fontsize=8.5,
+                            color=r2_color,
+                            bbox={"facecolor": "white", "edgecolor": "none", "pad": 0.3, "alpha": 0.9},
+                        )
+                    if "n_people" in group.columns:
+                        n_min = int(group["n_people"].min())
+                        if n_min < 24:
+                            ax.text(
+                                0.04,
+                                0.05,
+                                f"N={n_min}",
+                                transform=ax.transAxes,
+                                ha="left",
+                                va="bottom",
+                                fontsize=6,
+                                color="#2F3A40",
+                            )
+                    lo = float(np.nanmin(mean))
+                    hi = float(np.nanmax(mean))
+                    span = hi - lo
+                    if span <= 0:
+                        span = max(abs(hi), 1.0) * 0.05
+                    ax.set_ylim(lo - 0.45 * span, hi + 0.38 * span)
+                ax.set_xlim(0, 100)
+                ax.set_xticks([0, 50, 100])
+                ax.grid(axis="y", alpha=0.22)
+                ax.tick_params(labelsize=6)
+                if r == 0:
+                    ax.set_title(MODALITY[inter]["label"], fontsize=9, pad=1)
+                if r == len(rows) - 1 and c == 1:
+                    ax.set_xlabel("LF gait phase (%)", fontsize=7)
+                if c == 0:
+                    ax.set_ylabel(ylabel, fontsize=7)
+    title_y = 0.908 if n_rows == 3 else 0.928
+    fig.text(0.28, title_y, "Ring", ha="center", va="bottom", fontsize=11)
+    fig.text(0.73, title_y, "Rectangle", ha="center", va="bottom", fontsize=11)
+    handles = [
+        Line2D([0], [0], color="#A0AEC0", lw=6, label="Mean"),
+        Line2D([0], [0], color="#8E989E", lw=1.2, label="± SE"),
+        Line2D([0], [0], color=RF_IC_COLOR, lw=0.8, ls=":", label="~RF IC"),
+    ]
+    fig.legend(
+        handles=handles,
+        loc="lower center",
+        ncol=3,
+        frameon=False,
+        fontsize=8,
+        bbox_to_anchor=(0.52, 0.955 if n_rows == 3 else 0.964),
+    )
+    tmp = output.with_name(output.stem + "_tmp.png")
+    fig.savefig(tmp, bbox_inches="tight")
+    plt.close(fig)
+    tmp.replace(output)
+
+
+def _plot_turn_combined(turns: pd.DataFrame, *, output: Path) -> None:
+    """One row: ring on the left, rectangle on the right. Same zoom and R² labels as pointing."""
+    r2_color = "#3E4650"
+    df = turns.copy()
+    if "kind" in df.columns:
+        df = df[df["kind"].astype(str) == "turn"]
+    fig = plt.figure(figsize=(7.3, 2.85))
+    grid = fig.add_gridspec(
+        1,
+        7,
+        width_ratios=[1, 1, 1, 0.22, 1, 1, 1],
+        left=0.07,
+        right=0.99,
+        bottom=0.16,
+        top=0.58,
+        wspace=0.38,
+    )
+    col_for = {0: 0, 1: 1, 2: 2, 3: 4, 4: 5, 5: 6}
+    for block, (layout, _layout_label) in enumerate(LAYOUTS):
+        for c, inter in enumerate(INTERACTIONS):
+            ax = fig.add_subplot(grid[0, col_for[block * 3 + c]])
+            color = MODALITY[inter]["color"]
+            ax.axvline(50.0, color=RF_IC_COLOR, lw=0.7, ls=":", zorder=0)
+            group = df[
+                (df["layout"].astype(str) == layout)
+                & (df["interaction"].astype(str) == inter)
+            ].sort_values("bin_center")
+            if not group.empty:
+                phase = group["bin_center"].to_numpy(dtype=float)
+                mean = group["mean"].to_numpy(dtype=float)
+                se = (
+                    group["se"].fillna(0.0).to_numpy(dtype=float)
+                    if "se" in group.columns
+                    else np.zeros_like(mean)
+                )
+                ax.bar(
+                    phase,
+                    mean,
+                    width=8.0,
+                    color=color,
+                    alpha=0.9,
+                    edgecolor="#5C6B73",
+                    linewidth=0.35,
+                    zorder=2,
+                )
+                ax.errorbar(
+                    phase,
+                    mean,
+                    yerr=se,
+                    fmt="none",
+                    ecolor="#8E989E",
+                    elinewidth=0.85,
+                    capsize=1.6,
+                    capthick=0.7,
+                    zorder=3,
+                )
+                f2 = harmonic_k_fit(phase, mean, 2)
+                if np.isfinite(f2.get("r2", np.nan)):
+                    ax.text(
+                        0.98,
+                        0.97,
+                        f"R²={f2['r2']:.2f}",
+                        transform=ax.transAxes,
+                        ha="right",
+                        va="top",
+                        fontsize=8.5,
+                        color=r2_color,
+                        bbox={"facecolor": "white", "edgecolor": "none", "pad": 0.3, "alpha": 0.9},
+                    )
+                if "n_people" in group.columns:
+                    n_min = int(group["n_people"].min())
+                    if n_min < 24:
+                        ax.text(
+                            0.04,
+                            0.05,
+                            f"N={n_min}",
+                            transform=ax.transAxes,
+                            ha="left",
+                            va="bottom",
+                            fontsize=6,
+                            color="#2F3A40",
+                        )
+                lo = float(np.nanmin(mean))
+                hi = float(np.nanmax(mean))
+                span = hi - lo
+                if span <= 0:
+                    span = max(abs(hi), 1.0) * 0.05
+                ax.set_ylim(lo - 0.45 * span, hi + 0.38 * span)
+            ax.set_xlim(0, 100)
+            ax.set_xticks([0, 50, 100])
+            ax.grid(axis="y", alpha=0.22)
+            ax.tick_params(labelsize=6)
+            ax.set_title(MODALITY[inter]["label"], fontsize=9, pad=1)
+            if c == 1:
+                ax.set_xlabel("LF gait phase (%)", fontsize=7)
+            if c == 0:
+                ax.set_ylabel("Turns", fontsize=7)
+    fig.text(0.28, 0.66, "Ring", ha="center", va="bottom", fontsize=11)
+    fig.text(0.73, 0.66, "Rectangle", ha="center", va="bottom", fontsize=11)
+    handles = [
+        Line2D([0], [0], color="#A0AEC0", lw=6, label="Mean"),
+        Line2D([0], [0], color="#8E989E", lw=1.2, label="± SE"),
+        Line2D([0], [0], color=RF_IC_COLOR, lw=0.8, ls=":", label="~RF IC"),
+    ]
+    fig.legend(
+        handles=handles,
+        loc="lower center",
+        ncol=3,
+        frameon=False,
+        fontsize=8,
+        bbox_to_anchor=(0.52, 0.78),
+    )
+    tmp = output.with_name(output.stem + "_tmp.png")
+    fig.savefig(tmp, bbox_inches="tight")
+    plt.close(fig)
+    tmp.replace(output)
+
+
 def main() -> None:
     apply_base_style()
     out = out_dir("C_gait")
@@ -328,6 +718,21 @@ def main() -> None:
     else:
         print("WARN: no pointing distance source")
 
+    # Appear count — successful trials, LF phase at target appear
+    if APPEAR_COUNT.is_file():
+        ap = pd.read_csv(APPEAR_COUNT)
+        _plot_phase_bars(
+            ap,
+            ycol="mean",
+            secol="se",
+            ylabel="Appear count",
+            title="Target appear: successful-trial count vs LF gait phase",
+            output=out / "appear_count_vs_gait_success.png",
+        )
+        ap.to_csv(out / "appear_count_across_success.csv", index=False)
+    else:
+        print(f"WARN: missing {APPEAR_COUNT}")
+
     # Confirm count — success only AND all attempts (success + miss/timeout)
     if CONFIRM_COUNT.is_file():
         cc = pd.read_csv(CONFIRM_COUNT)
@@ -348,14 +753,17 @@ def main() -> None:
         for tag, ysrc, sesrc, title in count_specs:
             plot_df = cc.rename(columns={ysrc: "mean", sesrc: "se"}).copy()
             plot_df["subset"] = tag
-            _plot_phase_bars(
-                plot_df,
-                ycol="mean",
-                secol="se",
-                ylabel="Confirm count",
-                title=title,
-                output=out / f"confirm_count_vs_gait_{tag}.png",
-            )
+            if tag == "all":
+                _plot_confirm_stacked(cc, output=out / "confirm_count_vs_gait_all.png")
+            else:
+                _plot_phase_bars(
+                    plot_df,
+                    ycol="mean",
+                    secol="se",
+                    ylabel="Confirm count",
+                    title=title,
+                    output=out / f"confirm_count_vs_gait_{tag}.png",
+                )
             plot_df.to_csv(out / f"confirm_count_across_{tag}.csv", index=False)
             # Keep unprefixed names as success for older Overleaf paths.
             if tag == "success":
@@ -431,6 +839,27 @@ def main() -> None:
         sac_across.to_csv(out / "saccade_count_across.csv", index=False)
     else:
         print(f"WARN: missing {SACCADE_PERSON} — run saccade_aim_gait_idt.py")
+
+    speed_path = out / "pointing_speed_across.csv"
+    sac_path = out / "saccade_count_across.csv"
+    turn_path = analysis_out("features/instability_gait_phase.py") / "across.csv"
+    turns = None
+    if turn_path.is_file():
+        turns = pd.read_csv(turn_path)
+        turns = turns[turns["kind"].astype(str) == "turn"].copy()
+        turns.to_csv(out / "turn_count_across.csv", index=False)
+    else:
+        print(f"WARN: missing {turn_path}")
+    if speed_path.is_file() and sac_path.is_file():
+        _plot_gait_metrics_combined(
+            pd.read_csv(speed_path),
+            None,
+            pd.read_csv(sac_path),
+            turns,
+            output=out / "gait_pointing_combined.png",
+        )
+    else:
+        print("WARN: skip combined gait figure; missing speed or saccade CSV")
 
     print(f"Wrote figures → {out}")
 

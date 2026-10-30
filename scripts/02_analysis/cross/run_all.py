@@ -39,9 +39,16 @@ def main() -> None:
                 cwd=str(_ROOT),
             )
 
+    _run("fig_AA_stat.py")
     _run("fig_A_factor.py")
     _run("fig_B_stand_walk.py")
     _run("fig_C_gait.py")
+    _run("fig_D_ic_match.py")
+    _run("fig_E_ic_traj.py")
+    _run("fig_G_ic_speed.py")
+    _run("fig_G_transit_dist.py")
+    _run("fig_H_ic_progress.py")
+    _run("fig_I_peri_ic_speed.py")
 
     sys.path.insert(0, str(_HERE))
     from _out import OUT_ROOT
